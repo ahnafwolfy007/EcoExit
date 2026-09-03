@@ -1,0 +1,6 @@
+__pycache__/
+*.py[cod]
+
+# Downloaded/generated CIFAR-100 dataset (too large for GitHub; see README).
+data/cifar-100-python.tar.gz
+data/cifar-100-python/

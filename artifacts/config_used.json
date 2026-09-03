@@ -1,0 +1,99 @@
+{
+  "model": {
+    "resolutions": [
+      16,
+      24,
+      32
+    ],
+    "n_exits": 3,
+    "base_width": 16,
+    "blocks_per_stage": 2,
+    "n_classes": 100,
+    "exit_loss_weights": [
+      0.4,
+      0.7,
+      1.0
+    ]
+  },
+  "train": {
+    "epochs": 1,
+    "batch_size": 128,
+    "lr": 0.1,
+    "momentum": 0.9,
+    "weight_decay": 0.0005,
+    "sandwich_n_random": 1,
+    "train_subset": 0,
+    "val_fraction": 0.1,
+    "seed": 0,
+    "num_workers": 0
+  },
+  "energy": {
+    "b1_pj_per_mac": 3.7,
+    "b2_pj_per_act_byte": 62.0,
+    "b3_pj_per_weight_byte": 62.0,
+    "b0_j": 0.0002,
+    "p_static_w": 1.9,
+    "p_idle_w": 0.15,
+    "e_sense_j_per_kpix": 0.0011,
+    "e_pre_j_per_kpix": 0.00024,
+    "e_wake_j": 3.0,
+    "measurement_noise_frac": 0.03,
+    "system_scale_factor": 250.0
+  },
+  "solar": {
+    "panel_area_m2": 0.008,
+    "panel_efficiency": 0.19,
+    "slot_seconds": 60,
+    "plan_block_slots": 15,
+    "days": 45,
+    "seed": 0
+  },
+  "battery": {
+    "capacity_wh": 4.0,
+    "soc_init_frac": 0.6,
+    "soc_min_frac": 0.05,
+    "eta_charge": 0.92,
+    "eta_discharge": 0.96,
+    "self_discharge_per_month": 0.025,
+    "dod_points": [
+      0.2,
+      0.5,
+      0.8,
+      1.0
+    ],
+    "cycles_at_dod": [
+      12000.0,
+      6000.0,
+      3000.0,
+      2000.0
+    ]
+  },
+  "carbon": {
+    "panel_kgco2e_per_wp": 0.55,
+    "panel_wp": 1.5,
+    "board_kgco2e": 22.0,
+    "battery_kgco2e_per_kwh": 85.0,
+    "deployment_years": 5.0
+  },
+  "stream": {
+    "events_per_day": 24.0,
+    "burst_size_mean": 3.0,
+    "crepuscular_boost": 3.0,
+    "background_value": 0.02,
+    "event_value": 1.0,
+    "seed": 0
+  },
+  "control": {
+    "alpha": 0.1,
+    "aci_gamma": 0.02,
+    "horizon_hours": 24.0,
+    "replan_minutes": 30.0,
+    "soc_bins": 41,
+    "oracle_soc_bins": 201,
+    "reserve_frac": 0.1,
+    "wear_price": 0.0
+  },
+  "dataset": "cifar100",
+  "out_dir": "results",
+  "artifacts_dir": "artifacts"
+}

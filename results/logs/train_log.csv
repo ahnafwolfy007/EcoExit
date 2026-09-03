@@ -1,0 +1,2 @@
+epoch,train_loss,time_s,val_acc_r16_e0,val_acc_r16_e1,val_acc_r16_e2,val_acc_r24_e0,val_acc_r24_e1,val_acc_r24_e2,val_acc_r32_e0,val_acc_r32_e1,val_acc_r32_e2
+1,8.587830412195387,342.824823141098,0.0724,0.0976,0.1136,0.0722,0.0936,0.1158,0.0718,0.0906,0.1048
