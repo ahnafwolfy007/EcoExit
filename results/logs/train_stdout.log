@@ -1,0 +1,5 @@
+[train] device=cpu quick=False epochs=10
+[train] train batches=351 val=20 test=40
+[train] elastic backbone params=188,348 resolutions=(16, 24, 32) exits=3
+[train] epoch   1/10  loss=8.5878  val_best_acc=0.1158  time=372.3s
+[train] epoch   2/10  loss=7.7431  val_best_acc=0.1690  time=555.4s
