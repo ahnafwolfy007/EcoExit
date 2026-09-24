@@ -16,23 +16,40 @@ protocol → positioning → timeline.
 
 ```bash
 pip install -r requirements.txt
-python run_all.py --quick      # ~10-15 min, laptop-friendly
+python tests/test_core.py             # verify the install, no downloads
+python scripts/00_fetch_datasets.py   # ~180 MB, no account needed
+python run_all.py --quick             # ~15 min, laptop-friendly
 ```
 
-Then open `results/REPORT.html`. Full details, troubleshooting, and a
-non-technical walkthrough are in [`RUN_GUIDE.md`](RUN_GUIDE.md).
+Then open `results/REPORT.html`. Every dataset link is in
+[`DATASETS.md`](DATASETS.md); setup, flags and troubleshooting are in
+[`RUN_GUIDE.md`](RUN_GUIDE.md).
 
-## What each contribution looks like as code
+**Read the Phase 0 gate first** (`scripts/06_phase0_gate.py`, stage 4 of
+`run_all.py`). It decides whether the controller is doing anything at all, and
+it is designed to be able to say no. Its current verdict, and why, is in
+[`RUN_GUIDE.md`](RUN_GUIDE.md#current-state-as-of-this-build).
 
-| Report contribution | Where it lives |
+## What each claim looks like as code
+
+| Claim | Where it lives |
 |---|---|
-| A — Energy shadow pricing (directional water-filling) | `ecoexit/control/pricing.py` |
-| B — Conformal harvest bounds (Adaptive Conformal Inference) | `ecoexit/forecast/conformal.py` |
-| C — Battery wear + embodied carbon in the objective | `ecoexit/battery/model.py`, `ecoexit/eval/metrics.py` |
-| D — Measured vs. MACs-only energy model | `ecoexit/energy/model.py`, `scripts/02_profile_energy.py` |
-| E — The duty-cycle (temporal) knob | `ecoexit/sim/loop.py` (`run_shadow_price`'s duty=0 action) |
-| F — Event-value stream (not plain CIFAR-100 accuracy) | `ecoexit/sim/stream.py` |
-| G — Oracle-referenced, cross-climate evaluation | `ecoexit/control/baselines.py` (`OracleDP`), `scripts/04` |
+| 1 — Carbon-optimal ≠ energy-optimal | `ecoexit/eval/metrics.py` (`battery_carbon_share`, `gco2e_per_correct_inference`) |
+| 2 — Path-dependent wear price from the rainflow residual | `ecoexit/wear/rainflow.py` (`OnlineWearPricer`) |
+| 3 — Learning-augmented guarantee on the conformal bound | `ecoexit/forecast/conformal.py`, `ControlCfg.trust` |
+| 4 — Co-located event + harvest benchmark | `ecoexit/data/camera_traps.py`, `ecoexit/solar/pvgis.py` |
+
+Supporting method, not claimed as contributions: energy shadow pricing
+(`ecoexit/control/pricing.py`), the measured-vs-MACs energy model
+(`ecoexit/energy/model.py`), and the duty-cycle knob (`ecoexit/sim/loop.py`).
+
+## Regime and sizing
+
+`ecoexit/sizing.py` computes the harvest-to-demand ratio, which is the
+independent variable every headline figure should be plotted against. At a
+fixed panel area four of five sites harvest more than the most expensive policy
+could spend, which makes `static_max` correct rather than weak there; the gate
+resizes each site to land inside the discretionary band before comparing.
 
 ## Project layout
 

@@ -6,23 +6,24 @@
       32
     ],
     "n_exits": 3,
-    "base_width": 16,
+    "base_width": 12,
     "blocks_per_stage": 2,
     "n_classes": 100,
     "exit_loss_weights": [
       0.4,
       0.7,
       1.0
-    ]
+    ],
+    "backbone": null
   },
   "train": {
-    "epochs": 1,
+    "epochs": 3,
     "batch_size": 128,
     "lr": 0.1,
     "momentum": 0.9,
     "weight_decay": 0.0005,
-    "sandwich_n_random": 1,
-    "train_subset": 0,
+    "sandwich_n_random": 0,
+    "train_subset": 8000,
     "val_fraction": 0.1,
     "seed": 0,
     "num_workers": 0
@@ -45,8 +46,10 @@
     "panel_efficiency": 0.19,
     "slot_seconds": 60,
     "plan_block_slots": 15,
-    "days": 45,
-    "seed": 0
+    "days": 7,
+    "seed": 0,
+    "source": "analytic",
+    "pvgis_year": 2020
   },
   "battery": {
     "capacity_wh": 4.0,
@@ -68,12 +71,19 @@
       2000.0
     ]
   },
+  "wear": {
+    "mode": "path",
+    "kappa_scale": 1.0,
+    "proxy_nominal_depth": 0.3,
+    "min_swing": 0.0001
+  },
   "carbon": {
     "panel_kgco2e_per_wp": 0.55,
     "panel_wp": 1.5,
     "board_kgco2e": 22.0,
     "battery_kgco2e_per_kwh": 85.0,
-    "deployment_years": 5.0
+    "deployment_years": 5.0,
+    "profile": "sbc"
   },
   "stream": {
     "events_per_day": 24.0,
@@ -81,17 +91,36 @@
     "crepuscular_boost": 3.0,
     "background_value": 0.02,
     "event_value": 1.0,
-    "seed": 0
+    "seed": 0,
+    "source": "synthetic"
   },
   "control": {
     "alpha": 0.1,
     "aci_gamma": 0.02,
     "horizon_hours": 24.0,
     "replan_minutes": 30.0,
-    "soc_bins": 41,
-    "oracle_soc_bins": 201,
     "reserve_frac": 0.1,
-    "wear_price": 0.0
+    "trust": 1.0,
+    "soc_bins": 41,
+    "oracle_soc_bins": 201
+  },
+  "data": {
+    "root": "./data",
+    "cifar_dir": "./data/cifar-100-python",
+    "camera_trap_dir": "./data/camera_traps",
+    "pvgis_cache_dir": "./data/pvgis",
+    "battery_dir": "./data/battery",
+    "camera_trap_source": "caltech"
+  },
+  "experiment": {
+    "n_seeds": 2,
+    "ci_level": 0.95,
+    "n_bootstrap": 2000,
+    "target_ratio": 0.75,
+    "ratio_sweep": [
+      0.55,
+      0.85
+    ]
   },
   "dataset": "cifar100",
   "out_dir": "results",

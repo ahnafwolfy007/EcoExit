@@ -259,8 +259,16 @@ def main():
     A("that number.")
     A("")
     if carbon:
-        A(md_table(carbon, ["variant", "value_per_joule", "final_wear", "n_replacements", "carbon_kg", "ctu"],
-                    fmt=dict(value_per_joule=4, final_wear=5, carbon_kg=2, ctu=3)))
+        A(md_table(carbon, ["variant", "value_per_joule", "final_wear",
+                              "projected_replacements_over_deployment", "carbon_kg", "ctu"],
+                    fmt=dict(value_per_joule=4, final_wear=5,
+                              projected_replacements_over_deployment=3, carbon_kg=2, ctu=3)))
+        A("")
+        A("`projected_replacements_over_deployment` extrapolates the observed wear rate")
+        A("to a full deployment horizon as a continuous quantity (an LCA-style")
+        A("amortisation, not a truck-roll count) -- the integer `n_replacements` used")
+        A("elsewhere rounds up to 1 for both variants over this trace length, which")
+        A("would hide exactly the difference this experiment is about.")
     A("")
     A("![carbon inversion](figures/carbon_inversion.png)")
     A("")

@@ -72,7 +72,47 @@ def _cloud_process(n: int, kc_mean: float, rho: float, rng: np.random.Generator)
     return np.clip(kc, 0.04, 1.0)
 
 
-def make_trace(site: str, site_cfg: dict, solar_cfg, seed: int = 0) -> SolarTrace:
+def make_trace(site: str, site_cfg: dict, solar_cfg, seed: int = 0,
+               cache_dir: str = "./data/pvgis") -> SolarTrace:
+    """Dispatch on `solar_cfg.source`: analytic by default, PVGIS when asked.
+
+    The PVGIS path needs a network on first call only; the series is cached to
+    disk afterwards.
+    """
+    if getattr(solar_cfg, "source", "analytic") == "pvgis":
+        return make_trace_pvgis(site, site_cfg, solar_cfg, cache_dir=cache_dir)
+    return make_trace_analytic(site, site_cfg, solar_cfg, seed=seed)
+
+
+def make_trace_pvgis(site: str, site_cfg: dict, solar_cfg,
+                     cache_dir: str = "./data/pvgis") -> SolarTrace:
+    """Real measured hourly irradiance at this site's coordinates.
+
+    The clear-sky envelope is still computed analytically, because the conformal
+    forecaster predicts the clear-sky *index* and needs a denominator; PVGIS
+    supplies the numerator.
+    """
+    from ecoexit.solar.pvgis import fetch_pvgis_hourly, hourly_to_slots
+
+    n = int(solar_cfg.days * 24 * 3600 / solar_cfg.slot_seconds)
+    hourly = fetch_pvgis_hourly(site_cfg["lat"], site_cfg["lon"],
+                                solar_cfg.pvgis_year, cache_dir=cache_dir)
+
+    start_hour = (int(site_cfg.get("day_of_year", 1)) - 1) * 24
+    ghi = hourly_to_slots(hourly, solar_cfg.slot_seconds, n, start_hour=start_hour)
+
+    ghi_clear, elev = _clear_sky(site_cfg["lat"], int(site_cfg["day_of_year"]),
+                                 n, solar_cfg.slot_seconds)
+    # Measured irradiance can exceed the Haurwitz envelope under cloud
+    # enhancement; keep the envelope above the measurement so kc stays in [0,1].
+    ghi_clear = np.maximum(ghi_clear, ghi)
+
+    p_w = ghi * solar_cfg.panel_area_m2 * solar_cfg.panel_efficiency
+    return SolarTrace(site, solar_cfg.slot_seconds, ghi, ghi_clear, elev,
+                      p_w * solar_cfg.slot_seconds)
+
+
+def make_trace_analytic(site: str, site_cfg: dict, solar_cfg, seed: int = 0) -> SolarTrace:
     n = int(solar_cfg.days * 24 * 3600 / solar_cfg.slot_seconds)
     rng = np.random.default_rng(seed)
 

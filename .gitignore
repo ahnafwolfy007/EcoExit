@@ -1,6 +1,12 @@
 __pycache__/
 *.py[cod]
 
-# Downloaded/generated CIFAR-100 dataset (too large for GitHub; see README).
-data/cifar-100-python.tar.gz
-data/cifar-100-python/
+# Downloaded datasets. All re-fetchable with
+# `python scripts/00_fetch_datasets.py`; every source is listed in DATASETS.md.
+# Leading slash anchors this to the repo root so it does not swallow the
+# ecoexit/data/ source package.
+/data/
+
+# Scratch
+*.part
+results.zip

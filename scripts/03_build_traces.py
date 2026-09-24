@@ -26,16 +26,83 @@ import matplotlib.pyplot as plt
 
 from ecoexit.config import Config, SITES, TRAIN_SITE, TEST_SITES
 from ecoexit.solar.traces import make_trace
-from ecoexit.sim.stream import make_stream
+from ecoexit.sim.stream import make_stream, make_stream_from_events
 from ecoexit.forecast.conformal import simulate_forecast_and_calibration
+
+
+def load_camera_trap_events(cfg, args):
+    """Real capture timestamps, binned to the slot grid, one busy window per site.
+
+    Each simulated site is assigned a different real camera location, so the
+    five "climates" now carry five genuinely different arrival processes rather
+    than five draws from the same synthetic generator. The window chosen for
+    each location is the densest one of the required length: real deployments
+    contain multi-month dead stretches, and starting at the first record often
+    lands in one, which would make every policy look identical for reasons
+    that have nothing to do with control.
+    """
+    from ecoexit.data.camera_traps import (
+        find_metadata, load_coco_metadata, build_records, records_by_location,
+        longest_dense_window, arrivals_to_slots,
+    )
+
+    src = cfg.data.camera_trap_source
+    path = find_metadata(cfg.data.camera_trap_dir, src)
+    if path is None:
+        raise SystemExit(
+            f"[traces] no {src} metadata JSON in {cfg.data.camera_trap_dir}\n"
+            f"         run: python scripts/00_fetch_datasets.py --only {src}\n"
+            f"         or use --events synthetic"
+        )
+    print(f"[traces] reading {os.path.basename(path)} "
+          f"({os.path.getsize(path) / 1e6:.0f} MB)")
+
+    records, stats = build_records(load_coco_metadata(path))
+    print(f"[traces] {src}: {stats['n_kept']:,} records kept of {stats['n_total']:,}, "
+          f"{stats['n_locations']} locations, {stats['empty_fraction'] * 100:.1f}% empty, "
+          f"{stats['n_dropped_bad_timestamp']:,} malformed timestamps dropped")
+
+    by_loc = records_by_location(records)
+    n_slots = int(cfg.solar.days * 86400 / cfg.solar.slot_seconds)
+    # Rank by NON-EMPTY captures, not total. The busiest camera by raw count is
+    # location 96 with 14,465 frames and not one animal in them -- a trap
+    # triggering on vegetation. Ranking by volume picks exactly those, and
+    # hands the simulator a site with no task on it.
+    ranked = sorted(by_loc.items(),
+                    key=lambda kv: -sum(1 for r in kv[1] if not r.is_empty))
+
+    out = {}
+    sites = [TRAIN_SITE] + TEST_SITES
+    for site, (loc, recs) in zip(sites, ranked):
+        start, count = longest_dense_window(recs, cfg.solar.slot_seconds, n_slots)
+        if start is None or count == 0:
+            continue
+        binned = arrivals_to_slots(recs, cfg.solar.slot_seconds, n_slots, start=start)
+        # Weight each capture by whether it actually holds an animal. About
+        # half of all camera-trap frames are empty, and crediting a policy for
+        # waking on an empty frame would make "wake constantly" the optimal
+        # strategy for a reason that has nothing to do with the task.
+        weights = np.where(binned["is_event"], cfg.stream.event_value,
+                           cfg.stream.background_value)
+        out[site] = dict(slots=binned["slots"], weights=weights)
+        n_ev = int(binned["is_event"].sum())
+        print(f"[traces]   {site:<10} <- location {loc:<6} "
+              f"{len(binned['slots']):5d} captures in window, {n_ev} non-empty, "
+              f"from {start.date()}")
+    return out
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--artifacts", type=str, default="artifacts")
     ap.add_argument("--out", type=str, default="results")
-    ap.add_argument("--test-set-size", type=int, default=10000)
+    ap.add_argument("--test-set-size", type=int, default=None,
+                    help="evaluation-pool size; defaults to what scripts/02 wrote")
     ap.add_argument("--days", type=int, default=None)
+    ap.add_argument("--source", choices=["analytic", "pvgis"], default=None,
+                    help="irradiance source: analytic generator or real PVGIS series")
+    ap.add_argument("--events", choices=["synthetic", "camera_trap"], default=None,
+                    help="event timing: synthetic process or real capture timestamps")
     args = ap.parse_args()
 
     os.makedirs(f"{args.artifacts}/traces", exist_ok=True)
@@ -44,6 +111,26 @@ def main():
     cfg = Config()
     if args.days:
         cfg.solar.days = args.days
+    if args.source:
+        cfg.solar.source = args.source
+    if args.events:
+        cfg.stream.source = args.events
+
+    # The simulator may only draw from the evaluation pool scripts/02 set aside;
+    # drawing from the full test set would undo that separation.
+    eval_pool_size = args.test_set_size
+    if eval_pool_size is None:
+        pool_path = f"{args.artifacts}/per_image_outcomes.npz"
+        if os.path.exists(pool_path):
+            eval_pool_size = int(np.load(pool_path)["correct"].shape[2])
+        else:
+            eval_pool_size = 5000
+    print(f"[traces] irradiance={cfg.solar.source}  events={cfg.stream.source}  "
+          f"eval pool={eval_pool_size}")
+
+    event_slots_for = {}
+    if cfg.stream.source == "camera_trap":
+        event_slots_for = load_camera_trap_events(cfg, args)
     slots_per_day = int(86400 / cfg.solar.slot_seconds)
     horizon_slots = int(cfg.control.horizon_hours * 3600 / cfg.solar.slot_seconds)
 
@@ -52,17 +139,27 @@ def main():
 
     fig, axes = plt.subplots(len(all_sites), 1, figsize=(9, 2.1 * len(all_sites)), sharex=True)
     for i, site in enumerate(all_sites):
-        t = make_trace(site, SITES[site], cfg.solar, seed=cfg.solar.seed + i)
-        stream = make_stream(t.elevation_deg, t.n_slots, cfg.solar.slot_seconds,
-                              cfg.stream, dataset_size=args.test_set_size,
-                              seed=cfg.stream.seed + i)
+        t = make_trace(site, SITES[site], cfg.solar, seed=cfg.solar.seed + i,
+                       cache_dir=cfg.data.pvgis_cache_dir)
+        if site in event_slots_for:
+            ev = event_slots_for[site]
+            stream = make_stream_from_events(
+                ev["slots"], t.n_slots, cfg.stream, dataset_size=eval_pool_size,
+                seed=cfg.stream.seed + i, location=site,
+                event_weights=ev["weights"])
+        else:
+            stream = make_stream(t.elevation_deg, t.n_slots, cfg.solar.slot_seconds,
+                                 cfg.stream, dataset_size=eval_pool_size,
+                                 seed=cfg.stream.seed + i)
         traces[site] = (t, stream)
 
         np.savez(f"{args.artifacts}/traces/{site}.npz",
                   ghi=t.ghi, ghi_clear=t.ghi_clear, elevation=t.elevation_deg,
                   harvest_j=t.harvest_j, kc=t.kc,
                   stream_value=stream.value, stream_is_event=stream.is_event,
-                  stream_cifar_index=stream.cifar_index)
+                  stream_image_index=stream.image_index,
+                  stream_source=np.array(stream.source),
+                  solar_source=np.array(cfg.solar.source))
 
         days_axis = np.arange(t.n_slots) * cfg.solar.slot_seconds / 86400.0
         axes[i].fill_between(days_axis, 0, t.ghi, color="#9A6508", alpha=0.55, lw=0)

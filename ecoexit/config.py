@@ -1,23 +1,29 @@
 """Central configuration for the EcoExit pipeline.
 
 Every constant a reviewer might question lives here, with a source note.
-Constants marked LITERATURE must be replaced with your own measurements or a
-cited datasheet before any number derived from them is claimed as a result.
+Constants marked LITERATURE must be replaced with measurements or a cited
+datasheet before any number derived from them is claimed as a result. The
+sensitivity sweep in scripts/04 exists because several of them currently
+determine the results more than the method does.
 """
 from dataclasses import dataclass, field, asdict
-from typing import Tuple, Dict
+from typing import Tuple, Dict, Optional
 import json
 
 
 @dataclass
 class ModelCfg:
     """Elastic backbone: k resolutions x m exits from one set of weights."""
-    resolutions: Tuple[int, ...] = (16, 24, 32)   # ePerceptive: keep them well separated
+    resolutions: Tuple[int, ...] = (16, 24, 32)
     n_exits: int = 3
     base_width: int = 16
     blocks_per_stage: int = 2
     n_classes: int = 100
     exit_loss_weights: Tuple[float, ...] = (0.4, 0.7, 1.0)
+    # Phase 3: a named torchvision/timm backbone with exit heads grafted on at
+    # matched depths. None keeps the bespoke ElasticNet, which is fine for
+    # Phase 0 plumbing but is not comparable to published work.
+    backbone: Optional[str] = None
 
 
 @dataclass
@@ -27,7 +33,7 @@ class TrainCfg:
     lr: float = 0.1
     momentum: float = 0.9
     weight_decay: float = 5e-4
-    sandwich_n_random: int = 1    # sandwich rule: smallest + largest + n random
+    sandwich_n_random: int = 1
     train_subset: int = 0         # 0 = use all
     val_fraction: float = 0.1
     seed: int = 0
@@ -42,47 +48,38 @@ class EnergyCfg:
 
     MACs, ActBytes, WeightBytes and T are MEASURED from the real model on the
     real machine (scripts/02_profile_energy.py). The coefficients and power
-    rails below are LITERATURE defaults for a Jetson-Nano-class node; replace
-    them with an INA219/INA3221 fit for any claim about real joules.
+    rails are LITERATURE defaults for a Jetson-Nano-class node.
     """
     b1_pj_per_mac: float = 3.7
     b2_pj_per_act_byte: float = 62.0
     b3_pj_per_weight_byte: float = 62.0
     b0_j: float = 2.0e-4
-    p_static_w: float = 1.9          # board rail draw DURING the brief active/compute window
-    p_idle_w: float = 0.15           # deep-sleep / power-gated draw BETWEEN wake windows (~150 mW
-    # MCU+RTC keeping the schedule and gating power to the main SBC). This is why the duty knob
-    # exists at all -- a Jetson left merely "idle but powered" draws ~1.5-3 W continuously
-    # (Hole H3) and would drain a small battery in hours regardless of policy; a real solar
-    # node instead power-gates the SBC between wake windows.
+    p_static_w: float = 1.9          # rail draw DURING the active/compute window
+    p_idle_w: float = 0.15           # deep-sleep draw BETWEEN wake windows
     e_sense_j_per_kpix: float = 1.1e-3
     e_pre_j_per_kpix: float = 2.4e-4
-    # LITERATURE: waking a power-gated SBC is a suspend/resume-plus-camera-init cycle
-    # (seconds, several watts), not an instant clock tick -- this is what makes *how
-    # often* to wake (Contribution E) as important a lever as *how* to infer.
-    e_wake_j: float = 3.0
+    e_wake_j: float = 3.0            # suspend/resume plus camera init
     measurement_noise_frac: float = 0.03
-    # The elastic backbone here is intentionally small (CPU-trainable in minutes), so its
-    # raw measured per-inference energy (used as-is for the Contribution D mismatch analysis
-    # in scripts/02) is far below what a production-scale vision backbone at full resolution
-    # would draw. `system_scale_factor` rescales ONLY the per-inference/sense terms when
-    # building the energy table the closed-loop system simulation (scripts/04) uses, so the
-    # duty/resolution/exit trade-off happens at a believable absolute wattage. It never
-    # touches the raw MACs/bytes/time numbers or the MACs-only-vs-decomposed comparison.
+    # Rescales ONLY the per-inference/sense terms when building the table the
+    # closed-loop simulation uses, so the trade-off happens at a believable
+    # absolute wattage for a production-scale backbone. Never touches the raw
+    # MACs/bytes/time numbers or the MACs-only-vs-decomposed comparison.
+    # This is a free parameter and must be swept, not asserted.
     system_scale_factor: float = 250.0
 
 
 @dataclass
 class SolarCfg:
-    # Deliberately undersized relative to a 60s-cadence Jetson-class workload: the
-    # point of this project is a controller for a genuinely energy-scarce deployment.
-    # A generously provisioned panel would make adaptive control largely unnecessary.
     panel_area_m2: float = 0.008
     panel_efficiency: float = 0.19
     slot_seconds: int = 60
     plan_block_slots: int = 15
-    days: int = 45          # 45 daily blocks gives conformal coverage a real sample size
+    days: int = 45
     seed: int = 0
+    # "analytic" = Haurwitz clear sky x AR(1) cloud process, fully offline.
+    # "pvgis"    = real measured hourly irradiance at each site's coordinates.
+    source: str = "analytic"
+    pvgis_year: int = 2020
 
 
 @dataclass
@@ -93,18 +90,60 @@ class BatteryCfg:
     eta_charge: float = 0.92
     eta_discharge: float = 0.96
     self_discharge_per_month: float = 0.025
+    # LITERATURE datasheet curve; CycleLifeCurve.fit turns it into N_f(d)=n0*d^-k.
+    # Replace with a fit to the Severson et al. cells for a measured curve.
     dod_points: Tuple[float, ...] = (0.2, 0.5, 0.8, 1.0)
     cycles_at_dod: Tuple[float, ...] = (12000.0, 6000.0, 3000.0, 2000.0)
+
+
+@dataclass
+class WearCfg:
+    """The path-dependent wear price (Claim 2)."""
+    mode: str = "path"                 # "none" | "proxy" | "path"
+    kappa_scale: float = 1.0           # multiplier on the carbon-derived kappa
+    proxy_nominal_depth: float = 0.30  # depth the energy-proportional strawman is frozen at
+    min_swing: float = 1e-4            # rainflow dither floor
 
 
 @dataclass
 class CarbonCfg:
     """Embodied carbon. All LITERATURE; sweep them, never claim a point value."""
     panel_kgco2e_per_wp: float = 0.55
-    panel_wp: float = 1.5    # matches SolarCfg's 0.008 m^2 x 0.19 eff x 1000 W/m^2
+    panel_wp: float = 1.5
     board_kgco2e: float = 22.0
     battery_kgco2e_per_kwh: float = 85.0
     deployment_years: float = 5.0
+    profile: str = "sbc"
+
+
+# Node hardware profiles. The carbon claim is only testable on a node where the
+# battery is a material share of embodied carbon -- see
+# `ecoexit.eval.metrics.battery_carbon_share`. The default SBC profile is NOT
+# such a node: a 22 kgCO2e board dwarfs a 4 Wh battery, so every policy scores
+# the same carbon and the inversion cannot appear. Kept as the default only
+# because it is what the original pipeline used; use "mcu" for the carbon work.
+CARBON_PROFILES: Dict[str, Dict[str, float]] = {
+    # Jetson-class single-board computer. Battery term is immaterial.
+    "sbc": dict(board_kgco2e=22.0, panel_wp=1.5, battery_capacity_wh=4.0),
+    # MCU-class camera-trap node: small PCB, microcontroller, camera module,
+    # and the kind of pack such deployments actually carry.
+    "mcu": dict(board_kgco2e=2.5, panel_wp=1.5, battery_capacity_wh=8.0),
+    # Same board, a pack sized so wear accumulates over a 5-year deployment.
+    "mcu_small_battery": dict(board_kgco2e=2.5, panel_wp=1.5, battery_capacity_wh=3.0),
+}
+
+
+def apply_carbon_profile(cfg: "Config", name: str) -> "Config":
+    """Switch node hardware class. Changes both carbon accounting and physics,
+    because battery capacity sets how deeply a given draw cycles the pack."""
+    if name not in CARBON_PROFILES:
+        raise KeyError(f"unknown carbon profile {name!r}; have {sorted(CARBON_PROFILES)}")
+    p = CARBON_PROFILES[name]
+    cfg.carbon.board_kgco2e = p["board_kgco2e"]
+    cfg.carbon.panel_wp = p["panel_wp"]
+    cfg.battery.capacity_wh = p["battery_capacity_wh"]
+    cfg.carbon.profile = name
+    return cfg
 
 
 @dataclass
@@ -115,27 +154,56 @@ class StreamCfg:
     background_value: float = 0.02
     event_value: float = 1.0
     seed: int = 0
+    # "synthetic" = Poisson-cluster crepuscular process (Phase 0 default).
+    # "camera_trap" = real capture timestamps from camera-trap metadata.
+    source: str = "synthetic"
 
 
 @dataclass
 class ControlCfg:
     alpha: float = 0.10
     aci_gamma: float = 0.02
-    horizon_hours: float = 24.0
+    horizon_hours: float = 24.0    # horizon the stored energy is amortized over
     replan_minutes: float = 30.0
-    soc_bins: int = 41        # realistic tabular-controller resolution (LUT, Q-learning, MDP)
-    oracle_soc_bins: int = 201  # finer grid for the offline DP ceiling -- an upper bound
-    # should not itself be handicapped by the same coarse discretisation a cheap embedded
-    # controller would use; 201 bins keeps quantisation error well under one slot's energy
-    # delta over the full SoC range.
+    reserve_frac: float = 0.10     # buffer above the hard floor the planner keeps
+    trust: float = 1.0             # 1 = trust the conformal bound, 0 = full reserve
+    soc_bins: int = 41
+    oracle_soc_bins: int = 201
+
+
+@dataclass
+class DataCfg:
+    """Where the downloaded datasets live. scripts/00_fetch_datasets.py fills
+    this directory; DATASETS.md lists every source and link."""
+    root: str = "./data"
+    cifar_dir: str = "./data/cifar-100-python"
+    camera_trap_dir: str = "./data/camera_traps"
+    pvgis_cache_dir: str = "./data/pvgis"
+    battery_dir: str = "./data/battery"
+    # Which camera-trap corpus supplies event timing.
+    camera_trap_source: str = "caltech"      # "caltech" | "serengeti"
+
+
+@dataclass
+class ExperimentCfg:
+    """Statistical and sweep protocol."""
+    n_seeds: int = 5
+    ci_level: float = 0.95
+    n_bootstrap: int = 2000
+    # The regime coordinate every headline figure is plotted against.
+    target_ratio: float = 0.75
+    ratio_sweep: Tuple[float, ...] = (0.4, 0.55, 0.7, 0.85, 1.0, 1.3)
 
 
 SITES: Dict[str, Dict[str, float]] = {
-    "dhaka":   dict(lat=23.8, kc_mean=0.62, kc_rho=0.93, day_of_year=196),
-    "nairobi": dict(lat=-1.3, kc_mean=0.66, kc_rho=0.90, day_of_year=196),
-    "munich":  dict(lat=48.1, kc_mean=0.52, kc_rho=0.95, day_of_year=196),
-    "phoenix": dict(lat=33.4, kc_mean=0.83, kc_rho=0.88, day_of_year=196),
-    "bergen":  dict(lat=60.4, kc_mean=0.41, kc_rho=0.96, day_of_year=196),
+    "dhaka":   dict(lat=23.8103, lon=90.4125, kc_mean=0.62, kc_rho=0.93, day_of_year=196),
+    "nairobi": dict(lat=-1.2921, lon=36.8219, kc_mean=0.66, kc_rho=0.90, day_of_year=196),
+    "munich":  dict(lat=48.1351, lon=11.5820, kc_mean=0.52, kc_rho=0.95, day_of_year=196),
+    "phoenix": dict(lat=33.4484, lon=-112.0740, kc_mean=0.83, kc_rho=0.88, day_of_year=196),
+    "bergen":  dict(lat=60.3913, lon=5.3221, kc_mean=0.41, kc_rho=0.96, day_of_year=196),
+    # Co-located with the camera-trap corpora, for the Claim 4 benchmark.
+    "serengeti": dict(lat=-2.3333, lon=34.8333, kc_mean=0.64, kc_rho=0.91, day_of_year=196),
+    "caltech":   dict(lat=32.6000, lon=-116.8000, kc_mean=0.78, kc_rho=0.89, day_of_year=196),
 }
 TRAIN_SITE = "dhaka"
 TEST_SITES = ["nairobi", "munich", "phoenix", "bergen"]
@@ -148,9 +216,12 @@ class Config:
     energy: EnergyCfg = field(default_factory=EnergyCfg)
     solar: SolarCfg = field(default_factory=SolarCfg)
     battery: BatteryCfg = field(default_factory=BatteryCfg)
+    wear: WearCfg = field(default_factory=WearCfg)
     carbon: CarbonCfg = field(default_factory=CarbonCfg)
     stream: StreamCfg = field(default_factory=StreamCfg)
     control: ControlCfg = field(default_factory=ControlCfg)
+    data: DataCfg = field(default_factory=DataCfg)
+    experiment: ExperimentCfg = field(default_factory=ExperimentCfg)
     dataset: str = "cifar100"
     out_dir: str = "results"
     artifacts_dir: str = "artifacts"
@@ -163,6 +234,14 @@ class Config:
     def battery_capacity_j(self) -> float:
         return self.battery.capacity_wh * 3600.0
 
+    @property
+    def slots_per_day(self) -> int:
+        return int(round(86400 / self.solar.slot_seconds))
+
+    @property
+    def replan_slots(self) -> int:
+        return max(int(round(self.control.replan_minutes * 60 / self.solar.slot_seconds)), 1)
+
 
 def quick(cfg: Config) -> Config:
     """Laptop-friendly preset: minutes, not hours."""
@@ -171,4 +250,6 @@ def quick(cfg: Config) -> Config:
     cfg.train.sandwich_n_random = 0
     cfg.model.base_width = 12
     cfg.solar.days = 7
+    cfg.experiment.n_seeds = 2
+    cfg.experiment.ratio_sweep = (0.55, 0.85)
     return cfg

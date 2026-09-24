@@ -1,0 +1,22 @@
+{
+  "passed": false,
+  "carbon_measurable": false,
+  "lambda_live": true,
+  "regime_binds": true,
+  "beats_static_max": false,
+  "battery_carbon_share_observed": 0.0011492683455357412,
+  "battery_carbon_share_full_pack": 0.014677314914742069,
+  "carbon_profile": "sbc",
+  "lambda_mean": 0.002608308250818483,
+  "lambda_frac_zero": 0.14434523809523808,
+  "discretionary_fraction": 0.3616586864218358,
+  "n_seeds": 2,
+  "target_ratio": 0.75,
+  "sites": [
+    "dhaka",
+    "nairobi",
+    "munich",
+    "phoenix",
+    "bergen"
+  ]
+}

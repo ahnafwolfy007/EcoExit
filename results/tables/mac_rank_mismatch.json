@@ -1,0 +1,9 @@
+{
+  "n_pairs": 36,
+  "n_mismatch": 6,
+  "mismatch_rate": 0.16666666666666666,
+  "cross_res_pairs": 27,
+  "cross_res_mismatch": 6,
+  "cross_res_mismatch_rate": 0.2222222222222222,
+  "spearman_rho": 0.7999999999999999
+}

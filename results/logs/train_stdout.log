@@ -3,3 +3,20 @@
 [train] elastic backbone params=188,348 resolutions=(16, 24, 32) exits=3
 [train] epoch   1/10  loss=8.5878  val_best_acc=0.1158  time=372.3s
 [train] epoch   2/10  loss=7.7431  val_best_acc=0.1690  time=555.4s
+[train] epoch   3/10  loss=7.2408  val_best_acc=0.1702  time=466.4s
+[train] epoch   4/10  loss=6.7616  val_best_acc=0.2336  time=427.5s
+[train] epoch   5/10  loss=6.3690  val_best_acc=0.2766  time=374.8s
+[train] epoch   6/10  loss=6.0239  val_best_acc=0.3022  time=323.8s
+[train] epoch   7/10  loss=5.7096  val_best_acc=0.3598  time=302.2s
+[train] epoch   8/10  loss=5.4487  val_best_acc=0.4118  time=305.6s
+[train] epoch   9/10  loss=5.2277  val_best_acc=0.4544  time=303.7s
+[train] epoch  10/10  loss=5.0735  val_best_acc=0.4718  time=298.6s
+[train] finished in 62.2 min
+[train] final TEST accuracy grid (rows=resolution, cols=exit):
+    res= 16: exit0=0.1913  exit1=0.3386  exit2=0.4063
+    res= 24: exit0=0.1938  exit1=0.3603  exit2=0.4706
+    res= 32: exit0=0.1868  exit1=0.3597  exit2=0.4760
+[train] wrote results/logs/train_log.csv
+[train] wrote results/figures/training_curves.png
+[train] wrote artifacts/backbone.pt
+[train] done.

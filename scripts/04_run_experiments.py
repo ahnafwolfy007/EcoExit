@@ -43,7 +43,7 @@ from ecoexit.config import Config, TRAIN_SITE, TEST_SITES
 from ecoexit.models.elastic import ElasticNet, set_resolution_idx
 from ecoexit.energy.model import profile_model, DecomposedModel, build_energy_table
 from ecoexit.control.baselines import (
-    Action, all_actions, action_energy,
+    Action, all_actions, action_energy, build_oracle_reward_matrix,
     StaticController, ReactiveLUT, HarvSchedQLearning, MonotoneMDPController, OracleDP,
 )
 from ecoexit.sim.loop import run_shadow_price, run_fixed_policy, run_action_sequence
@@ -52,6 +52,7 @@ from ecoexit.forecast.conformal import simulate_forecast_and_calibration
 from ecoexit.battery.model import Battery
 from ecoexit.eval.metrics import (
     useful_inferences_per_joule, total_embodied_carbon_kg, replacements_from_wear,
+    projected_replacements_continuous, amortised_embodied_carbon_kg,
     carbon_normalised_task_utility, value_of_forecast, percent_of_oracle,
 )
 
@@ -78,20 +79,27 @@ def load_backbone(artifacts_dir, cfg):
     energy_table = {k: v * sf for k, v in raw_table.items()}
     sense_energy = {ri: decomposed.sense_energy_j(r) * sf for ri, r in enumerate(resolutions)}
 
-    acc_grid = np.load(f"{artifacts_dir}/final_accuracy_grid.npz")["acc_grid"]
+    grids = np.load(f"{artifacts_dir}/final_accuracy_grid.npz")
+    acc_test = grids["acc_grid"]
+    # The controller's value function is the VALIDATION grid. Handing it the
+    # test grid and then scoring the simulation on that same pool is the leak
+    # scripts/02 now closes; fall back only for checkpoints written before it.
+    acc_grid = grids["acc_grid_val"] if "acc_grid_val" in grids else acc_test
+
     outc = np.load(f"{artifacts_dir}/per_image_outcomes.npz")
     correct, conf = outc["correct"], outc["conf"]
     per_image = {ri: {e: (correct[ri, e], conf[ri, e]) for e in range(n_exits)}
                  for ri in range(len(resolutions))}
     return dict(resolutions=resolutions, n_exits=n_exits, energy_table=energy_table,
-                sense_energy=sense_energy, acc_grid=acc_grid, per_image=per_image)
+                sense_energy=sense_energy, acc_grid=acc_grid,
+                acc_grid_test=acc_test, per_image=per_image)
 
 
 def load_site(artifacts_dir, site):
     d = np.load(f"{artifacts_dir}/traces/{site}.npz")
     fc = np.load(f"{artifacts_dir}/traces/{site}_forecast.npz")
     stream = FrameStream(value=d["stream_value"], is_event=d["stream_is_event"],
-                          cifar_index=d["stream_cifar_index"])
+                          image_index=d["stream_image_index"])
     return dict(ghi=d["ghi"], ghi_clear=d["ghi_clear"], elevation=d["elevation"],
                 harvest_j=d["harvest_j"], kc=d["kc"], stream=stream,
                 lower_j_per_day=fc["lower_j"], point_j_per_day=fc["point_j"])
@@ -162,7 +170,7 @@ def fit_harvsched(cfg, bb, site_data, n_epochs=3):
             if a.duty == 0:
                 e, correct = idle_j, False
             else:
-                img = stream.cifar_index[t]
+                img = stream.image_index[t]
                 correct = bool(bb["per_image"][a.res_idx][a.exit_idx][0][img])
                 e = idle_j + wake_j + bb["sense_energy"][a.res_idx] + bb["energy_table"][(a.res_idx, a.exit_idx)]
             frame_val = stream.value[t] * float(correct)
@@ -248,7 +256,7 @@ def run_all_policies_for_site(cfg, bb, site, site_data, harv_q, harv_acts,
     # -- confidence-only early exit (BranchyNet-style), always max res -----
     thresholds = np.full(n_exit - 1, 0.75)
     def conf_only_act(t, s):
-        img = stream.cifar_index[t]
+        img = stream.image_index[t]
         k = 0
         conf = bb["per_image"][n_res - 1][0][1][img]
         while k < n_exit - 1 and conf >= thresholds[k]:
@@ -289,11 +297,10 @@ def run_all_policies_for_site(cfg, bb, site, site_data, harv_q, harv_acts,
     # -- oracle --------------------------------------------------------------
     acts = action_lists(n_res, n_exit)
     ae = np.array([action_energy(a, bb["energy_table"], bb["sense_energy"], idle_j, wake_j) for a in acts])
-    base_val = np.array([0.0 if a.duty == 0 else bb["acc_grid"][a.res_idx, a.exit_idx] for a in acts])
+    reward_matrix = build_oracle_reward_matrix(acts, bb["per_image"], stream)
     oracle = OracleDP(cfg.control.oracle_soc_bins)
-    oracle_out = oracle.solve(harvest, ae, base_val, capacity_j, soc_min_j,
-                                cfg.battery.eta_charge, cfg.battery.eta_discharge,
-                                frame_value_t=stream.value)
+    oracle_out = oracle.solve(harvest, ae, reward_matrix, capacity_j, soc_min_j,
+                                cfg.battery.eta_charge, cfg.battery.eta_discharge)
     results["oracle"] = run_action_sequence(
         cfg, bb["energy_table"], bb["sense_energy"], bb["per_image"], harvest,
         stream, capacity_j, soc_min_j, acts, oracle_out["actions"])
@@ -472,30 +479,56 @@ def main():
     plt.close(fig)
     print(f"[exp] wrote {args.out}/figures/risk_frontier.png")
 
-    # ==== Experiment 3: carbon ranking inversion (train site) ===============
-    print("[exp] Experiment 3: carbon ranking inversion ...")
+    # ==== Experiment 3: carbon ranking inversion =============================
+    # Run at a genuinely scarce site, not the training site: Dhaka has so much
+    # harvest headroom that the shadow price sits at ~0 almost everywhere (the
+    # max config is always affordable), which leaves a wear penalty nothing to
+    # bite on. The inversion this experiment is looking for only has a chance
+    # to appear where the controller is actually trading energy against value.
+    CARBON_SITE = "bergen" if "bergen" in site_data else TEST_SITES[-1]
+    site_c = site_data[CARBON_SITE]
+    print(f"[exp] Experiment 3: carbon ranking inversion (site={CARBON_SITE}) ...")
     battery = Battery(cfg.battery, cfg.battery_capacity_j).set_slot_seconds(cfg.solar.slot_seconds)
-    wear_of_proxy = {k: v / cfg.battery_capacity_j for k, v in bb["energy_table"].items()}
+    # Wear proxy on the same scale as `energy_table` (Joules) so mu is
+    # Three arms, which together are the ablation that decides Claim 2:
+    #   none  -- energy price only
+    #   proxy -- energy-proportional wear, frozen at a nominal depth. This is
+    #            what every prior system does, and being constant it is
+    #            algebraically identical to raising lambda. It is the honest
+    #            strawman and it has to be in the table.
+    #   path  -- the rainflow residual price, which depends on position within
+    #            the open excursion and therefore cannot be written as a scaled
+    #            lambda. If this does not beat `proxy`, Claim 2 is dead.
+    from ecoexit.control.pricing import carbon_kappa
+    kappa_base = carbon_kappa(cfg.carbon, cfg.battery.capacity_wh)
 
+    trace_days_c = len(site_c["harvest_j"]) * cfg.solar.slot_seconds / 86400.0
     carbon_rows = []
-    for mu_name, mu in [("aggressive (mu=0)", 0.0), ("wear-aware (mu tuned)", 8.0)]:
+    for mu_name, wear_mode, kscale in [("aggressive (no wear price)", "none", 0.0),
+                                       ("energy-proportional proxy", "proxy", 1.0),
+                                       ("path-dependent (ours)", "path", 1.0)]:
         ctrl_res = run_shadow_price(cfg, bb["energy_table"], bb["sense_energy"], bb["acc_grid"],
-                                      bb["per_image"], site_d["harvest_j"], site_d["lower_j_per_day"],
+                                      bb["per_image"], site_c["harvest_j"], site_c["lower_j_per_day"],
                                       slots_per_day, int(cfg.control.replan_minutes*60/cfg.solar.slot_seconds),
-                                      site_d["stream"], cfg.battery_capacity_j,
+                                      site_c["stream"], cfg.battery_capacity_j,
                                       cfg.battery.soc_min_frac * cfg.battery_capacity_j,
-                                      site_d["elevation"], wear_of=wear_of_proxy if mu > 0 else None,
+                                      site_c["elevation"],
+                                      kappa=kappa_base * kscale, wear_mode=wear_mode,
                                       confidence_aware=True)
-        total_value = float((site_d["stream"].value * ctrl_res.correct).sum())
+        total_value = float((site_c["stream"].value * ctrl_res.correct).sum())
         total_energy = float(ctrl_res.energy_j.sum())
         wear_curve, half_cycles = battery.wear_from_soc_series(ctrl_res.soc_frac)
-        n_repl = replacements_from_wear(wear_curve[-1] if len(wear_curve) else 0.0)
-        carbon_kg = total_embodied_carbon_kg(cfg.carbon, cfg.battery.capacity_wh, n_repl)
+        final_wear = wear_curve[-1] if len(wear_curve) else 0.0
+        n_repl = replacements_from_wear(final_wear)
+        repl_continuous = projected_replacements_continuous(
+            final_wear, trace_days_c, cfg.carbon.deployment_years)
+        carbon_kg = amortised_embodied_carbon_kg(cfg.carbon, cfg.battery.capacity_wh, repl_continuous)
         carbon_rows.append(dict(
             variant=mu_name, total_value=total_value, total_energy_j=total_energy,
             value_per_joule=total_value / max(total_energy, 1e-9),
-            final_wear=wear_curve[-1] if len(wear_curve) else 0.0,
-            n_replacements=n_repl, carbon_kg=carbon_kg,
+            final_wear=final_wear, n_replacements=n_repl,
+            projected_replacements_over_deployment=repl_continuous,
+            carbon_kg=carbon_kg,
             ctu=carbon_normalised_task_utility(total_value, carbon_kg),
         ))
     with open(f"{args.out}/tables/carbon_inversion.csv", "w", newline="") as f:
@@ -504,7 +537,8 @@ def main():
     print(f"[exp] wrote {args.out}/tables/carbon_inversion.csv")
     for r in carbon_rows:
         print(f"    {r['variant']:24s} value/J={r['value_per_joule']:.4f}  CTU={r['ctu']:.3f}  "
-              f"wear={r['final_wear']:.5f}  replacements={r['n_replacements']}")
+              f"wear={r['final_wear']:.5f}  "
+              f"projected_repl/{cfg.carbon.deployment_years:.0f}yr={r['projected_replacements_over_deployment']:.3f}")
 
     fig, (axa, axb) = plt.subplots(1, 2, figsize=(9, 4))
     names = [r["variant"] for r in carbon_rows]
@@ -543,39 +577,43 @@ def main():
     print(f"[exp] wrote {args.out}/figures/cross_climate_transfer.png")
 
     # ==== Ablations ===========================================================
-    print("[exp] Ablations: knob subsets + confidence-awareness ...")
+    # Both ablations below are run at CARBON_SITE (the scarce site), for the
+    # same reason as Experiment 3: at the comfortable training site the
+    # shadow price sits at ~0 almost everywhere, so neither confidence-
+    # weighted stopping nor the duty knob has scarcity to respond to.
+    print(f"[exp] Ablations: knob subsets + confidence-awareness (site={CARBON_SITE}) ...")
     ablation_rows = []
+    v_oracle_c = float((site_c["stream"].value * all_results[CARBON_SITE]["oracle"].correct).sum())
 
     # confidence-aware vs -agnostic
     res_conf_agnostic = run_shadow_price(
         cfg, bb["energy_table"], bb["sense_energy"], bb["acc_grid"], bb["per_image"],
-        site_d["harvest_j"], site_d["lower_j_per_day"], slots_per_day,
-        int(cfg.control.replan_minutes*60/cfg.solar.slot_seconds), site_d["stream"],
+        site_c["harvest_j"], site_c["lower_j_per_day"], slots_per_day,
+        int(cfg.control.replan_minutes*60/cfg.solar.slot_seconds), site_c["stream"],
         cfg.battery_capacity_j, cfg.battery.soc_min_frac * cfg.battery_capacity_j,
-        site_d["elevation"], confidence_aware=False)
-    v_conf_agnostic = float((site_d["stream"].value * res_conf_agnostic.correct).sum())
-    v_ours_train = float((site_d["stream"].value * all_results[TRAIN_SITE]["ours"].correct).sum())
-    ablation_rows.append(dict(ablation="confidence_aware_fast_loop", value=v_ours_train,
-                                pct_of_oracle=percent_of_oracle(v_ours_train, v_oracle)))
+        site_c["elevation"], confidence_aware=False)
+    v_conf_agnostic = float((site_c["stream"].value * res_conf_agnostic.correct).sum())
+    v_ours_c = float((site_c["stream"].value * all_results[CARBON_SITE]["ours"].correct).sum())
+    ablation_rows.append(dict(ablation="confidence_aware_fast_loop", value=v_ours_c,
+                                pct_of_oracle=percent_of_oracle(v_ours_c, v_oracle_c)))
     ablation_rows.append(dict(ablation="confidence_agnostic_fast_loop", value=v_conf_agnostic,
-                                pct_of_oracle=percent_of_oracle(v_conf_agnostic, v_oracle)))
+                                pct_of_oracle=percent_of_oracle(v_conf_agnostic, v_oracle_c)))
 
     # duty knob on/off: a "no duty" controller that must always wake (only
     # resolution + depth are adaptive) vs the full ours with sleep available.
     # Approximated by a fixed act_fn that never sleeps, downgrading to the
     # cheapest config under scarcity instead of skipping the slot entirely --
     # isolates what the duty knob itself is worth on top of the other two.
-    n = len(site_d["harvest_j"])
     forced = run_fixed_policy(
-        cfg, bb["energy_table"], bb["sense_energy"], bb["per_image"], site_d["harvest_j"],
-        site_d["stream"], cfg.battery_capacity_j, cfg.battery.soc_min_frac * cfg.battery_capacity_j,
+        cfg, bb["energy_table"], bb["sense_energy"], bb["per_image"], site_c["harvest_j"],
+        site_c["stream"], cfg.battery_capacity_j, cfg.battery.soc_min_frac * cfg.battery_capacity_j,
         lambda t, s: Action(1, 0, 0) if s < 0.15 else Action(1, n_res - 1, n_exit - 1),
     )
-    v_forced = float((site_d["stream"].value * forced.correct).sum())
+    v_forced = float((site_c["stream"].value * forced.correct).sum())
     ablation_rows.append(dict(ablation="knobs_res_and_depth_only_no_duty", value=v_forced,
-                                pct_of_oracle=percent_of_oracle(v_forced, v_oracle)))
-    ablation_rows.append(dict(ablation="knobs_res_depth_and_duty_ours", value=v_ours_train,
-                                pct_of_oracle=percent_of_oracle(v_ours_train, v_oracle)))
+                                pct_of_oracle=percent_of_oracle(v_forced, v_oracle_c)))
+    ablation_rows.append(dict(ablation="knobs_res_depth_and_duty_ours", value=v_ours_c,
+                                pct_of_oracle=percent_of_oracle(v_ours_c, v_oracle_c)))
 
     with open(f"{args.out}/tables/ablations.csv", "w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=list(ablation_rows[0].keys()))
@@ -600,7 +638,7 @@ def main():
     print(f"[exp] wrote {args.out}/figures/pareto_frontier.png")
 
     # ==== SoC timeline example figure (train site, first 5 days) ============
-    n_show = min(slots_per_day * 5, n)
+    n_show = min(slots_per_day * 5, len(site_d["harvest_j"]))
     t_days = np.arange(n_show) / slots_per_day
     fig, ax = plt.subplots(figsize=(10, 4))
     for pol, res in [("ours", all_results[TRAIN_SITE]["ours"]),

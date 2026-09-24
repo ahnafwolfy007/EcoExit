@@ -47,10 +47,20 @@ def action_energy(a: Action, energy_table, sense_energy, idle_j, wake_j) -> floa
     return idle_j + wake_j + sense_energy[a.res_idx] + energy_table[(a.res_idx, a.exit_idx)]
 
 
-def action_value(a: Action, acc_grid, frame_value: float) -> float:
-    if a.duty == 0:
-        return 0.0
-    return frame_value * float(acc_grid[a.res_idx, a.exit_idx])
+def build_oracle_reward_matrix(acts: List[Action], per_image, stream) -> np.ndarray:
+    """reward_matrix[t, a] for OracleDP.solve: the *exact* per-instance value
+    action `a` earns at slot `t`, using the specific image the stream shows
+    at that slot rather than the config's average accuracy. See
+    `OracleDP.solve`'s docstring for why this matters."""
+    n = len(stream.value)
+    n_actions = len(acts)
+    reward = np.zeros((n, n_actions))
+    for ai, a in enumerate(acts):
+        if a.duty == 0:
+            continue
+        correct_arr, _ = per_image[a.res_idx][a.exit_idx]
+        reward[:, ai] = stream.value * correct_arr[stream.image_index].astype(float)
+    return reward
 
 
 class StaticController:
@@ -249,19 +259,23 @@ class OracleDP:
         self.n_soc_bins = n_soc_bins
 
     def solve(self, harvest_j: np.ndarray, action_energy_j: np.ndarray,
-              base_value_per_action: np.ndarray, capacity_j: float, soc_min_j: float,
-              eta_c: float, eta_d: float, frame_value_t: np.ndarray = None):
-        """`base_value_per_action[a]` is 0 for sleep, acc_grid[r,k] for wake
-        actions. `frame_value_t[t]` is the *ground-truth* per-slot frame
-        value -- perfect foresight means the oracle is allowed to know this
-        in advance (every other policy only sees the pre-capture estimate
-        `expected_value_curve`, never the realised value)."""
+              reward_matrix: np.ndarray, capacity_j: float, soc_min_j: float,
+              eta_c: float, eta_d: float):
+        """`reward_matrix[t, a]` is the exact value action `a` earns at slot
+        `t`: 0 for sleep, and for a wake action `frame_value_t[t] *
+        correct(r, k, image_t)` using the *specific* image the stream shows
+        at that slot -- not the config's average accuracy. This is what
+        makes the oracle a genuine, unbeatable upper bound: a confidence-
+        aware policy earns real per-instance wins (Bullo et al.'s finding),
+        and a DP whose reward is only the average accuracy per config is not
+        actually optimal against that -- it can be beaten in a specific
+        realisation. Knowing the exact per-image outcome in advance is
+        exactly the "perfect foresight" this policy is named for.
+        """
         n = len(harvest_j)
         n_bins = self.n_soc_bins
         soc_edges = np.linspace(soc_min_j, capacity_j, n_bins)
         span = max(capacity_j - soc_min_j, 1e-9)
-        if frame_value_t is None:
-            frame_value_t = np.ones(n)
 
         V = np.zeros((n + 1, n_bins))
         pol = np.zeros((n, n_bins), dtype=np.int32)
@@ -276,7 +290,7 @@ class OracleDP:
             idx = np.clip(np.round((next_soc_c - soc_min_j) / span * (n_bins - 1)),
                           0, n_bins - 1).astype(np.int64)
             v_next = V[t + 1][idx]                                         # (n_bins, n_actions)
-            q = frame_value_t[t] * base_value_per_action[None, :] + v_next
+            q = reward_matrix[t][None, :] + v_next
             q = np.where(feasible, q, -1e18)
             best_a = np.argmax(q, axis=1)
             V[t] = q[np.arange(n_bins), best_a]

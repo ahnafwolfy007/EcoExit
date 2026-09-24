@@ -1,0 +1,5 @@
+ablation,value,pct_of_oracle
+confidence_aware_fast_loop,10.92,15.626788780767027
+confidence_agnostic_fast_loop,11.92,17.057813394390383
+knobs_res_and_depth_only_no_duty,26.560000000000002,38.008013737836286
+knobs_res_depth_and_duty_ours,10.92,15.626788780767027
