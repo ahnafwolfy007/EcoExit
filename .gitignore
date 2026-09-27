@@ -1,12 +1,16 @@
 __pycache__/
 *.py[cod]
 
-# Downloaded datasets. All re-fetchable with
-# `python scripts/00_fetch_datasets.py`; every source is listed in DATASETS.md.
-# Leading slash anchors this to the repo root so it does not swallow the
-# ecoexit/data/ source package.
+# Downloaded datasets, all re-fetchable with `python pipeline/00_fetch_datasets.py`
+# (every source is listed in DATASETS.md). The leading slash anchors this to the
+# repo root so it does not match the sunsched/data/ source package.
 /data/
+
+# Cached features, trained heads and simulation inputs: large and regenerable.
+/outputs/artifacts/
 
 # Scratch
 *.part
 results.zip
+venv/
+.venv/

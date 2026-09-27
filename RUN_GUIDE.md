@@ -1,275 +1,174 @@
-# Running EcoExit
+# Running SunSched
 
-This is the full EcoExit system: a multi-exit neural network, a solar/battery
-simulator, and a controller that decides — every minute of simulated time —
-whether to wake, at what resolution, and how deep into the network to run,
-trading accuracy against energy and battery wear.
+This guide takes a fresh machine to a finished `REPORT.md`. Everything runs on a
+CPU; no GPU and no hardware are needed.
 
-Everything runs on **CPU**. No GPU needed for anything in this guide.
+> The folders `ecoexit/`, `scripts/`, `tests/` and `run_all.py` are the **old v1
+> code**. Ignore them. Everything below uses `sunsched/`, `pipeline/` and
+> `run_sunsched.py`.
 
-- **Quick check**: ~15 minutes, ~180 MB download.
-- **Full run**: 1–3 hours depending on your CPU.
+## What you need
 
----
+| | |
+|---|---|
+| Python | 3.10, 3.11 or 3.12 (3.13+ usually works; use 3.11 if installs fail) |
+| Disk | about **10 GB** free: 6.5 GB image archive, about 1 GB of cached features, plus outputs |
+| RAM | 8 GB or more |
+| CPU | any; more cores make the simulation stages faster |
+| Network | needed for the downloads and for PVGIS on first use; later runs use the cache |
 
-## 1. Install Python
-
-Python **3.10, 3.11 or 3.12**. (3.13+ usually works; if you hit install
-errors, use 3.11.)
-
-- **Windows**: [python.org/downloads](https://www.python.org/downloads/) —
-  tick **"Add Python to PATH"** during install.
-- **Mac**: `brew install python@3.11`, or python.org.
-- **Linux**: almost certainly already there.
+## 1. Set up
 
 ```bash
-python --version
-```
-
-If that says "command not found", try `python3` instead, and use `python3` for
-every command below.
-
-## 2. Get the project and open a terminal in it
-
-```bash
-cd path/to/EcoExit-Model
-```
-
-On Windows you can type `cd ` and then drag the folder into the terminal.
-
-## 3. Create a virtual environment
-
-```bash
+cd EcoExit-Model
 python -m venv venv
 ```
 
 Activate it:
 
-- **Windows PowerShell**: `.\venv\Scripts\Activate.ps1`
-- **Windows cmd.exe**: `venv\Scripts\activate.bat`
-- **Mac/Linux**: `source venv/bin/activate`
-
-Your prompt should now start with `(venv)`. If you close the terminal, re-run
-the activate command before doing anything else.
-
-## 4. Install packages
+- Windows PowerShell: `.\venv\Scripts\Activate.ps1`
+- Windows cmd: `venv\Scripts\activate.bat`
+- Mac/Linux: `source venv/bin/activate`
 
 ```bash
 pip install -r requirements.txt
 ```
 
-If `torch` fails or hangs, install the CPU-only build directly:
+If installing torch fails, install the CPU build explicitly, then run the line above again:
 
 ```bash
 pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
 ```
 
-## 5. Check the install
+## 2. Check the install (seconds)
 
 ```bash
-python tests/test_core.py
+python -m sunsched.tests
 ```
 
-These are unit tests with no downloads and no training — they check the wear
-model, the pricing bisection and the sizing maths. **All of them should pass.**
-If they do not, stop here and send the output; nothing downstream will be
-trustworthy.
-
-## 6. Download the data
+All 18 tests must pass. They use synthetic data only. Optionally, run the same
+plus a 2–5 minute end-to-end run of the later pipeline stages on a synthetic world:
 
 ```bash
-python scripts/00_fetch_datasets.py
+python -m sunsched.tests --slow
 ```
 
-About 180 MB: CIFAR-100 (the images), the Caltech camera-trap metadata (real
-capture timestamps), and cached PVGIS irradiance for each site. Nothing needs
-an account or an API key.
+If anything fails here, stop and send the output back. Nothing later can be trusted.
 
-Add `--all` to also pull Snapshot Serengeti (another 188 MB) — only needed for
-the large-scale and multi-season experiments.
-
-Every source and direct link is listed in [DATASETS.md](DATASETS.md), including
-what to do if one is blocked on your network.
-
-## 7. Run it
+## 3. Download the data
 
 ```bash
-python run_all.py --quick
+python pipeline/00_fetch_datasets.py
 ```
 
-That runs the whole pipeline in order: train → profile → build traces → **the
-gate** → full comparison → report. Expect **~15 minutes**.
+About 6.6 GB. How long it takes depends on your connection. The download
+**resumes** if it stops, so just run the same command again. Every link is in
+[DATASETS.md](DATASETS.md), including manual `curl` commands.
 
-Once that works, the real thing:
+Do not extract `eccv_18_all_images_sm.tar.gz`; the pipeline reads it as it is.
+
+## 4. Quick run first
 
 ```bash
-python run_all.py
+python run_sunsched.py --skip-fetch --quick
 ```
 
-And with real irradiance and real camera-trap event timing:
+This uses a subset of the images, 2 weather years and a 90-day season, and exists
+to show that everything works on your machine. Most of its time is feature
+extraction, which still has to read the whole 6.5 GB archive once. The numbers it
+produces are **not** results.
+
+## 5. Full run
 
 ```bash
-python run_all.py --real-data
+python run_sunsched.py --skip-fetch
 ```
 
----
+Rough timing on an 8-core laptop CPU. Your machine will differ.
 
-## The one result that matters
+| Stage | What it does | Time |
+|---|---|---|
+| 1 | Stream all 57,864 images through the frozen network once | 30–90 min |
+| 2 | Train 6 small exit heads, calibrate them | 5–15 min |
+| 3 | Fetch/cache PVGIS weather, build capture streams | 1–5 min |
+| 4 | Main comparison: 10 policies × 9 cameras × 5 weather years × 3 regimes | 5–20 min |
+| 5 | Frontiers, regime curves, sensitivity (about 11,000 simulations) | 30–90 min |
+| 6 | Kill test | seconds |
+| 7 | Report | seconds |
 
-Stage 4 is the **Phase 0 gate**. Read its output before anything else.
+For a first pass, `--skip-sweeps` skips stage 5 (the kill test and report still run).
 
-The question it answers is whether the controller is actually doing anything.
-There is a specific failure this project has already hit once: if the planner
-hands the controller more energy budget than it can possibly spend, the price
-collapses to zero, the controller degenerates into "always run the biggest
-model", and every result downstream becomes a restatement of that baseline
-while still looking like a table of numbers.
-
-The gate checks four things and prints `PASS` or `FAIL` for each:
-
-0. **Is carbon measurable?** The policy can only move one component of
-   lifecycle carbon — the battery, by wearing it out faster or slower. Panel
-   and board are fixed the moment the node is deployed. If the battery is a
-   rounding error next to the board, then "carbon-normalized utility" is just
-   total value divided by a constant, every policy ranks exactly as it does on
-   raw value, and the carbon inversion cannot appear however good the
-   controller is.
-1. **Is the price live?** Non-zero and varying, not pinned at zero.
-2. **Does the regime bind?** Daily solar harvest has to land *between* the
-   always-asleep floor and the always-awake-at-maximum ceiling. Above the
-   ceiling there is simply no decision to make and "always maximum" is the
-   correct answer — not a weak baseline.
-3. **Does the controller beat `static_max`?** Across seeds, with a paired
-   statistical test.
+If a stage fails, fix the error and resume from it instead of starting over:
 
 ```bash
-python scripts/06_phase0_gate.py
-python scripts/06_phase0_gate.py --profile mcu     # different node hardware class
+python run_sunsched.py --skip-fetch --from 4
 ```
 
-Exit code `0` means pass, `2` means the gate ran correctly and the verdict is
-fail. **A FAIL is a real answer, not a crash.** The script prints which
-condition failed and what to check.
+Each stage can also be run on its own: `python pipeline/04_run_experiments.py`,
+and so on. Every script takes `--quick`, `--workers N`, `--out`, `--data`.
 
-### Current state, as of this build
+## 6. Results
 
-Conditions 1 and 2 pass. Conditions 0 and 3 fail, and 0 explains 3:
+Everything lands in `outputs/results/`:
 
-- With the default `sbc` hardware profile, the battery is **0.06%** of
-  lifecycle carbon at the wear the simulation actually produces (1.5% even at
-  a full replacement), against a 22 kgCO2e board. So the carbon metric cannot
-  separate policies, and it reduces to raw captured value.
-- On raw captured value, `static_max` wins, because a brownout is free in the
-  current energy model: an unaffordable wake silently falls back to idle at no
-  cost. That makes "always try the biggest model" a genuinely strong policy,
-  and the proposed controller's voluntary reserve a pure loss.
-
-Both are properties of the *parameters and the energy model*, not bugs in the
-controller — and both need a decision before the carbon claim can be tested.
-The `--profile` flag exists to explore the first; the second needs a cost for
-over-committing.
-
-Results land in `results/tables/gate_verdict.json`, `gate_sizing.csv`,
-`gate_runs.csv` and `gate_tests.csv`.
-
----
-
-## Where everything ends up
-
-| Path | What it is |
+| File | What it is |
 |---|---|
-| `results/REPORT.html` | The whole story in one scrollable page. **Start here.** |
-| `results/tables/gate_verdict.json` | Pass/fail on the three gate conditions. |
-| `results/tables/gate_sizing.csv` | Per site: harvest-to-demand ratio and regime. |
-| `results/tables/*.csv` | Every number, for re-plotting. |
-| `results/figures/*.png` | Every chart on its own. |
-| `artifacts/backbone.pt` | The trained model checkpoint. |
-| `artifacts/traces/` | Per-site solar traces and forecasts. |
+| `REPORT.md` | The whole story, one page. **Start here.** |
+| `tables/kill_test.json` | The verdict: does SunSched beat the strongest existing approaches? |
+| `tables/summary.csv` | Mean and 95% CI of every metric, per policy and regime |
+| `tables/runs.csv` | One row per simulated deployment |
+| `tables/frontier.csv`, `regime.csv`, `sensitivity.csv` | Stage 5 sweeps |
+| `tables/diel_mismatch.csv`, `environment_summary.json` | When animals arrive versus when the sun does |
+| `tables/accuracy_grid.csv` | Classifier accuracy at each exit and resolution |
+| `figures/*.png` | All figures |
 
-After a run, this checks the artifacts for the leakage problems the pipeline is
-designed to avoid:
+`outputs/artifacts/` holds cached features and model outputs. It is large and
+regenerable; do not commit it.
 
-```bash
-python tests/test_pipeline.py
-```
+**What to send back:** zip `outputs/results/` and send it, together with the
+terminal output of the run.
 
----
+## How to read the kill test
 
-## Running stages individually
+`run_sunsched.py` prints `kill test verdict: PASS` or `FAIL` at the end.
 
-Every stage writes its files before the next begins, so you can re-run any one
-of them without starting over:
-
-```bash
-python scripts/00_fetch_datasets.py
-python scripts/01_train_backbone.py --quick
-python scripts/02_profile_energy.py
-python scripts/03_build_traces.py --days 10
-python scripts/06_phase0_gate.py --quick
-python scripts/04_run_experiments.py --skip-rl
-python scripts/05_make_report.py
-```
-
-Drop `--quick`, `--days 10` and `--skip-rl` for full versions.
-
-Useful flags:
-
-| Flag | Effect |
-|---|---|
-| `03 --source pvgis` | Real measured irradiance instead of the analytic generator. |
-| `03 --events camera_trap` | Real capture timestamps instead of the synthetic process. |
-| `06 --seeds 5` | More seeds, tighter confidence intervals. |
-| `06 --ratio 0.6` | Target a scarcer regime when sizing the panels. |
-| `06 --no-resize` | Keep the original panel size, to reproduce the original tie. |
-
----
+- **PASS**: SunSched beat per-frame energy-aware early exit, the same with a
+  charge ceiling, and lazy deferral, by margins that were fixed before any
+  results existed.
+- **FAIL**: it did not. That is a valid result, not a crash; stage 6 exits with
+  code 2 by design. It means the claim cannot be made as stated. The frontier and
+  sensitivity tables then show whether a narrower claim still holds.
 
 ## Troubleshooting
 
-**"No module named torch" / numpy / scipy**
-Step 4 was skipped, or the virtual environment is not active.
+**`No module named sunsched`**: run the commands from the `EcoExit-Model` folder
+itself, not from inside `pipeline/`.
 
-**Stuck downloading `cifar-100-python.tar.gz`**
-It is a slow university server, not a hang. Give it a few minutes. If it fails
-outright, you are probably behind a firewall — try another network, or download
-it manually per [DATASETS.md](DATASETS.md).
+**PVGIS unreachable** (stage 0 or 3): retry later; the service is sometimes busy.
+If it stays down, `--solar analytic` runs everything on synthetic weather. The
+report is then marked synthetic, so say so.
 
-**Camera-trap metadata will not download**
-Run with `--events synthetic` (the default). The pipeline works end to end
-without it; you only lose the real-event-timing experiments.
+**The image download stopped**: run `python pipeline/00_fetch_datasets.py --only images`
+again; it continues where it stopped.
 
-**PVGIS unreachable**
-Leave the irradiance source as `analytic`. Same deal — everything runs, you
-lose only the real-irradiance claim.
+**Stage 1 says images were "not found in the archive"**: the archive is
+incomplete. Delete it and download it again.
 
-**Anything mentioning CUDA or a GPU**
-This pipeline never touches a GPU. If you see a GPU error something unusual is
-happening; send the message.
+**Out of memory in stage 1**: lower `batch_size` in `VisionCfg` in
+`sunsched/config.py` (for example to 8).
 
-**The gate says FAIL**
-That is the pipeline working. Read the diagnostics it prints — it names which
-of the three conditions failed and what to change. It is meant to be able to
-say no.
+**Windows: stage 4 or 5 hangs at the start**: try `--workers 1` to rule out
+multiprocessing, and send the output if it then works.
 
-**A script raises a traceback**
-Send the last ~15 lines. That is the part that says what actually went wrong.
+**Anything else**: send the last 30 lines of output. That is where the actual
+error is.
 
----
+## What is being simulated
 
-## What is actually being simulated
-
-A solar-powered camera node in the field with a small panel and a small
-battery. Animals trigger the camera in bursts, mostly at dawn and dusk, and
-most frames turn out to be empty. The node cannot afford to run its largest
-model on every frame, so a controller continuously decides how much compute
-each frame is worth, given how much charge is left and how much sun is
-forecast.
-
-The twist the project is built around: for an off-grid node, **minimizing
-energy is the wrong objective**. Operational carbon is essentially zero — the
-sun is free — so what the policy actually controls is the *embodied* carbon of
-the hardware, and the only part of that a control policy can change is how fast
-it wears the battery out. Battery wear depends on how deeply the charge cycles,
-not on how many joules pass through. So the policy that maximizes work per
-joule is not the policy that minimizes lifetime carbon, and the controller here
-prices both.
+A solar-powered camera trap with a small panel and battery, replaying real
+captures from 9 real cameras. Every capture is triaged immediately by a cheap
+early exit. Frames worth a better label are either classified at once (the
+existing approaches) or stored and classified later with the full network in the
+daytime surplus (SunSched). The battery ages with its state of charge and
+temperature, so SunSched also avoids keeping it full, charging it only to a
+risk-controlled reserve.
