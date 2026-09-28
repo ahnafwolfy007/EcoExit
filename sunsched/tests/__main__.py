@@ -8,7 +8,7 @@ import sys
 import traceback
 
 MODULES = ["sunsched.tests.test_battery", "sunsched.tests.test_forecast",
-           "sunsched.tests.test_simulator", "sunsched.tests.test_vision"]
+           "sunsched.tests.test_simulator", "sunsched.tests.test_vision", "sunsched.tests.test_data"]
 
 
 def main():

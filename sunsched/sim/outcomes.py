@@ -12,21 +12,26 @@ class Outcomes:
     values: np.ndarray                  # value of a correct label, per frame
     locations: np.ndarray
     pred: Dict[str, np.ndarray]         # op -> predicted class per frame ("triage", "lite", "full")
-    conf: Dict[str, np.ndarray]
+    conf: Dict[str, np.ndarray]         # op -> max softmax probability
+    p_animal: np.ndarray                # triage detector's probability that the frame is not empty
     macs: Dict[str, int]
-    gain_edges: np.ndarray
-    gain_tables: Dict[str, np.ndarray]  # refine op -> (n_bins, 2): [bin, triage said empty]
+    gain_edges: np.ndarray              # bin edges over p_animal
+    gain_tables: Dict[str, np.ndarray]  # refine op -> expected value gain per p_animal bin
     empty_idx: int
 
-    def gain(self, op: str, pred: int, conf: float) -> float:
+    def gain(self, op: str, p_animal: float) -> float:
         """Expected value gained by refining a frame, given only its triage output.
 
-        Estimated on the calibration split (a camera the simulated deployments
-        never use), so no simulated frame's label informs its own gain.
+        Indexed by the triage *detector's* animal probability. The first CCT20
+        run indexed it by the species head's top-1 confidence instead, which
+        turned out to be almost constant (0.089-0.124 for nearly every frame
+        across 16 classes), so the table was noise. Estimated on calibration
+        cameras that no simulated deployment uses, and made non-decreasing in
+        p_animal.
         """
-        b = int(np.searchsorted(self.gain_edges, conf, side="right")) - 1
-        b = min(max(b, 0), self.gain_tables[op].shape[0] - 1)
-        return float(self.gain_tables[op][b, int(pred == self.empty_idx)])
+        t = self.gain_tables[op]
+        b = int(np.searchsorted(self.gain_edges, p_animal, side="right")) - 1
+        return float(t[min(max(b, 0), len(t) - 1)])
 
 
 def load_outcomes(path: str) -> Outcomes:
@@ -41,8 +46,9 @@ def load_outcomes(path: str) -> Outcomes:
         locations=d["eval_locations"].astype(str),
         pred={o: d[f"pred_{o}"].astype(np.int64) for o in ops},
         conf={o: d[f"conf_{o}"].astype(np.float64) for o in ops},
+        p_animal=d["p_animal_triage"].astype(np.float64),
         macs={o: int(d[f"macs_{o}"]) for o in ops},
         gain_edges=d["gain_edges"].astype(np.float64),
-        gain_tables={o: d[f"gain_{o}"].astype(np.float64) for o in refine_ops},
+        gain_tables={o: d[f"gain_{o}"].astype(np.float64).ravel() for o in refine_ops},
         empty_idx=names.index("empty"),
     )

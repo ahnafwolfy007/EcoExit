@@ -42,7 +42,7 @@ class EnergyAwareEarlyExit(Policy):
         x = (soc - self.soc_lo) / max(self.soc_hi - self.soc_lo, 1e-9)
         return self.theta_hi * float(np.clip(x, 0.0, 1.0))
 
-    def post_triage(self, obs, frame, pred, conf, gain):
+    def post_triage(self, obs, frame, pred, conf, gain, p_animal):
         return "now" if conf < self.threshold(obs.soc) else "final"
 
     def now_op(self, obs):
@@ -63,7 +63,7 @@ class LazyDeferral(Policy):
         self.theta, self.soc_on, self.soc_keep = theta, soc_on, soc_keep
         self.interval = max(int(interval_slots), 1)
 
-    def post_triage(self, obs, frame, pred, conf, gain):
+    def post_triage(self, obs, frame, pred, conf, gain, p_animal):
         return "defer" if conf < self.theta else "final"
 
     def wants_batch(self, obs):
@@ -79,6 +79,21 @@ class LazyDeferral(Policy):
         n = int(max(0.0, usable) // e.refine_j[self.refine_op])
         items = sorted(items, key=lambda it: it.t)
         return items[:n]
+
+
+class LazyAnimalDeferral(LazyDeferral):
+    """Lazy deferral that defers only frames the triage detector thinks hold
+    an animal.
+
+    Not a published method: it exists so the deferral baseline has the same
+    informative signal SunSched v2 uses. On CCT20 the species head's top-1
+    confidence was nearly constant, so the plain `lazy_defer` rule deferred
+    every frame, empties included.
+    """
+    name = "lazy_animal"
+
+    def post_triage(self, obs, frame, pred, conf, gain, p_animal):
+        return "defer" if p_animal >= self.theta else "final"
 
 
 class ChargeCeilingEarlyExit(EnergyAwareEarlyExit):

@@ -5,14 +5,17 @@ import json
 import os
 from typing import Iterable, List
 
-from sunsched.config import Config, quick
+from sunsched.config import Config, apply_corpus, quick
 
 
 def base_parser(description: str) -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(description=description)
+    ap.add_argument("--corpus", choices=["cct20", "serengeti"], default="cct20",
+                    help="cct20 = development corpus, serengeti = pre-registered test corpus")
     ap.add_argument("--quick", action="store_true",
                     help="smoke-test preset: fewer images, 2 weather years, 90-day season")
-    ap.add_argument("--out", default="./outputs", help="where artifacts/ and results/ go")
+    ap.add_argument("--out", default=None,
+                    help="where artifacts/ and results/ go (default ./outputs/<corpus>)")
     ap.add_argument("--data", default="./data", help="where the downloaded datasets live")
     ap.add_argument("--solar", choices=["pvgis", "analytic"], default=None,
                     help="irradiance source (default pvgis; analytic is an offline fallback)")
@@ -22,14 +25,17 @@ def base_parser(description: str) -> argparse.ArgumentParser:
 
 def load_cfg(args) -> Config:
     cfg = Config()
+    corpus = getattr(args, "corpus", "cct20")
+    apply_corpus(cfg, corpus)
     if getattr(args, "quick", False):
         cfg = quick(cfg)
-    cfg.out_dir = args.out
+    cfg.out_dir = args.out or f"./outputs/{corpus}{'_quick' if getattr(args, 'quick', False) else ''}"
     root = args.data.rstrip("/\\")
     cfg.data.root = root
     cfg.data.cct20_dir = f"{root}/cct20"
     cfg.data.images_archive = f"{root}/cct20/eccv_18_all_images_sm.tar.gz"
     cfg.data.annotations_dir = f"{root}/cct20/eccv_18_annotation_files"
+    cfg.data.serengeti_dir = f"{root}/serengeti"
     cfg.data.pvgis_dir = f"{root}/pvgis"
     if getattr(args, "solar", None):
         cfg.solar.source = args.solar

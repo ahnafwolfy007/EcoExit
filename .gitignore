@@ -8,9 +8,11 @@ __pycache__/
 
 # Cached features, trained heads and simulation inputs: large and regenerable.
 /outputs/artifacts/
+/outputs/*/artifacts/
 
-# Scratch
+# Scratch, and zipped result bundles passed around by hand
 *.part
 results.zip
+outputs*.zip
 venv/
 .venv/

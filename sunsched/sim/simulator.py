@@ -43,7 +43,8 @@ class SimResult:
 
 
 def simulate(ctx: RunContext, policy: Policy, frames: np.ndarray, frame_slots: np.ndarray,
-             outcomes, harvest_j: np.ndarray, temp_c: np.ndarray, night: np.ndarray) -> SimResult:
+             outcomes, harvest_j: np.ndarray, temp_c: np.ndarray, night: np.ndarray,
+             soc_start: Optional[float] = None) -> SimResult:
     cfg = ctx.cfg
     en = ctx.energy
     n = ctx.n_slots
@@ -61,13 +62,14 @@ def simulate(ctx: RunContext, policy: Policy, frames: np.ndarray, frame_slots: n
     route = np.full(nf, UNCLASSIFIED, dtype=np.int8)
     final_slot = np.full(nf, -1, dtype=np.int64)
     tri_pred, tri_conf = outcomes.pred["triage"], outcomes.conf["triage"]
+    p_animal = outcomes.p_animal
 
     sunrise = set(int(s) for s in ctx.sunrise if s >= 0)
     sunset = set(int(s) for s in ctx.sunset if s >= 0)
 
     soc_trace = np.empty(n)
     ceil_trace = np.empty(n)
-    E = cfg.battery.soc_init * C
+    E = (cfg.battery.soc_init if soc_start is None else float(soc_start)) * C
     harvested = consumed = curtailed = 0.0
     b_wakes = dead = deferred = 0
 
@@ -137,11 +139,11 @@ def simulate(ctx: RunContext, policy: Policy, frames: np.ndarray, frame_slots: n
             if not spend(en.triage_j):
                 route[pos] = UNCLASSIFIED
                 continue
-            p, c = int(tri_pred[f]), float(tri_conf[f])
+            p, c, pa = int(tri_pred[f]), float(tri_conf[f]), float(p_animal[f])
             final_label[pos] = p
             route[pos] = TRIAGE
-            g = outcomes.gain(policy.refine_op, p, c)
-            decision = policy.post_triage(obs, pos, p, c, g)
+            g = outcomes.gain(policy.refine_op, pa)
+            decision = policy.post_triage(obs, pos, p, c, g, pa)
             if decision == "now":
                 now_list.append((pos, policy.now_op(obs), True))
             elif decision == "defer" and len(queue) < queue_cap and spend(en.store_j):

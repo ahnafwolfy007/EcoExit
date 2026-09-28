@@ -11,6 +11,9 @@ import json
 
 @dataclass
 class DataCfg:
+    # "cct20" is the development corpus; "serengeti" is the held-out test
+    # corpus of PREREGISTRATION.md. `apply_corpus` sets the fields below.
+    corpus: str = "cct20"
     root: str = "./data"
     cct20_dir: str = "./data/cct20"
     images_archive: str = "./data/cct20/eccv_18_all_images_sm.tar.gz"
@@ -29,6 +32,16 @@ class DataCfg:
     train_splits: Tuple[str, ...] = ("train", "cis_val", "cis_test")
     calib_split: str = "trans_val"
     eval_split: str = "trans_test"
+    # Snapshot Serengeti (test corpus). Images are fetched one by one from LILA,
+    # downscaled on arrival and cached small, so the multi-terabyte archives are
+    # never needed. The selection rule is fixed in PREREGISTRATION.md.
+    serengeti_dir: str = "./data/serengeti"
+    serengeti_season: str = "S10"
+    serengeti_train_images: int = 10000       # sampled from official train locations
+    serengeti_train_empty_frac: float = 0.2   # share of the training sample that is empty
+    serengeti_calib_cameras: int = 3          # from official val locations
+    serengeti_eval_budget: int = 15000        # images across the evaluation cameras
+    serengeti_min_eval_cameras: int = 6
 
 
 @dataclass
@@ -179,28 +192,58 @@ class BaselineCfg:
     lazy_theta: float = 0.9
     lazy_soc_on: float = 0.6
     lazy_soc_keep: float = 0.5
+    # lazy_animal: the same lazy deferral, but deferring only frames the triage
+    # detector thinks contain an animal. It gives the deferral baseline the
+    # same informative signal SunSched v2 uses, so a SunSched win cannot come
+    # from that signal alone.
+    lazy_animal_theta: float = 0.5
     ceiling_margin: float = 0.10
 
 
 @dataclass
 class ExperimentCfg:
-    main_site: str = "cct_region"
+    main_site: str = "cct_region"       # set per corpus by apply_corpus
+    # The two regime coordinates of PREREGISTRATION.md.
+    # Battery autonomy: capacity divided by the camera's own mean daily
+    # essential energy (sleep + capture + triage). The first run fixed the
+    # battery at 10 Wh, which was 175 days of autonomy and hid the regime where
+    # scheduling in time can matter.
+    autonomy_days: Tuple[float, ...] = (0.5, 1.0, 2.0, 3.0, 5.0, 10.0, 30.0, 100.0)
     # Harvest-to-demand ratio: annual harvest divided by the annual energy the
-    # always-refine-now policy would need at that location. It is the regime
-    # coordinate every headline figure is plotted against.
-    ratios: Tuple[float, ...] = (0.5, 1.0, 2.0)
-    ratio_sweep: Tuple[float, ...] = (0.3, 0.5, 0.75, 1.0, 1.5, 2.0, 3.0)
+    # always-refine-now policy would need at that camera.
+    ratios: Tuple[float, ...] = (0.75, 1.0, 1.5, 2.0, 3.0)
+    # Cells where the ablations and the sensitivity sweep run.
+    probe_cells: Tuple[Tuple[float, float], ...] = ((1.0, 1.5), (2.0, 1.0), (30.0, 1.5), (100.0, 2.0))
     alpha_sweep: Tuple[float, ...] = (0.01, 0.02, 0.05, 0.1, 0.2)
     days: int = 365
+    # Each deployment is simulated this many times back to back, each pass
+    # starting from the previous pass's final charge, and only the last pass is
+    # scored. With one pass, a large battery starting at 80% hands the policy
+    # months of free energy.
+    steady_state_passes: int = 2
     n_workers: int = 0                  # 0 = all cores but one
     ci_level: float = 0.95
     n_bootstrap: int = 2000
-    # Kill test: the proposed controller must beat the best per-frame
-    # controller by at least this much to count as a result.
-    kill_value_margin: float = 0.02     # absolute value-score points
-    kill_life_ratio: float = 1.15       # battery life multiple at no worse value
-    kill_value_tolerance: float = 0.01
-    kill_life_tolerance: float = 0.05
+
+
+@dataclass
+class HypothesisCfg:
+    """The pre-registered tests. See PREREGISTRATION.md; do not edit after the
+    test-corpus run has started."""
+    h1_min_night_share: float = 0.40
+    small_autonomy: Tuple[float, ...] = (0.5, 1.0, 2.0)
+    large_autonomy: Tuple[float, ...] = (30.0, 100.0)
+    test_ratios: Tuple[float, ...] = (1.0, 1.5, 2.0)
+    value_margin: float = 0.02
+    value_tolerance: float = 0.01
+    life_ratio: float = 1.15
+    life_tolerance: float = 0.05
+    alpha: float = 0.05
+    h2_min_cells: int = 5               # of 9
+    h3_min_cells: int = 4               # of 6
+    h5_min_share: float = 0.75
+    h5_baselines: Tuple[str, ...] = ("always_now", "triage_only", "ee_now", "ceiling_now",
+                                     "lazy_defer", "lazy_animal")
 
 
 # Sites. "cct_region" approximates where the Caltech Camera Traps cameras are
@@ -214,6 +257,16 @@ SITES: Dict[str, Dict] = {
     "dhaka":      dict(lat=23.81, lon=90.41, utc_offset=6, colocated=False),
     "munich":     dict(lat=48.14, lon=11.58, utc_offset=1, colocated=False),
     "bergen":     dict(lat=60.39, lon=5.32, utc_offset=1, colocated=False),
+    # Snapshot Serengeti grid, central Serengeti National Park, Tanzania.
+    "serengeti":  dict(lat=-2.33, lon=34.83, utc_offset=3, colocated=True),
+}
+
+# Per-corpus settings. `apply_corpus` copies them into a Config.
+CORPORA: Dict[str, Dict] = {
+    "cct20": dict(site="cct_region", aspect=1024 / 747,
+                  vehicle_classes=("car",), role="development"),
+    "serengeti": dict(site="serengeti", aspect=2048 / 1536,
+                      vehicle_classes=("human", "vehicle"), role="test"),
 }
 
 
@@ -229,7 +282,8 @@ class Config:
     control: ControlCfg = field(default_factory=ControlCfg)
     baselines: BaselineCfg = field(default_factory=BaselineCfg)
     experiment: ExperimentCfg = field(default_factory=ExperimentCfg)
-    out_dir: str = "./outputs"
+    hypothesis: HypothesisCfg = field(default_factory=HypothesisCfg)
+    out_dir: str = "./outputs/cct20"
 
     @property
     def artifacts_dir(self) -> str:
@@ -263,13 +317,30 @@ def pvgis_range() -> Tuple[int, int]:
     return min(years), max(years)
 
 
+def apply_corpus(cfg: Config, name: str) -> Config:
+    if name not in CORPORA:
+        raise ValueError(f"unknown corpus {name!r}; choose from {sorted(CORPORA)}")
+    c = CORPORA[name]
+    cfg.data.corpus = name
+    cfg.experiment.main_site = c["site"]
+    cfg.vision.aspect = c["aspect"]
+    cfg.task.vehicle_classes = tuple(c["vehicle_classes"])
+    return cfg
+
+
 def quick(cfg: Config) -> Config:
-    """Smoke-test preset: a subset of images, fewer years, a shorter season."""
+    """Smoke-test preset: fewer images, 2 weather years, a 90-day season, a
+    coarse grid. Checks the pipeline end to end; its numbers are not results."""
     cfg.vision.epochs = 10
     cfg.solar.years = (2014, 2015)
     cfg.experiment.days = 90
-    cfg.experiment.ratios = (0.5, 1.5)
-    cfg.experiment.ratio_sweep = (0.5, 1.0, 2.0)
+    cfg.experiment.autonomy_days = (0.5, 2.0, 30.0)
+    cfg.experiment.ratios = (1.0, 2.0)
+    cfg.experiment.probe_cells = ((2.0, 1.0), (30.0, 2.0))
     cfg.experiment.alpha_sweep = (0.02, 0.1)
     cfg.experiment.n_bootstrap = 500
+    cfg.data.serengeti_train_images = 2000
+    cfg.data.serengeti_calib_cameras = 1
+    cfg.data.serengeti_eval_budget = 4000
+    cfg.data.serengeti_min_eval_cameras = 3
     return cfg

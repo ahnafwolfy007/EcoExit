@@ -68,18 +68,37 @@ def test_archive_streaming_and_decode():
     assert tuple(to_batch([im, im]).shape) == (2, 3, 160, 224)
 
 
-def test_gain_table():
+def _train_exits_module():
     spec = importlib.util.spec_from_file_location(
         "train_exits", os.path.join(ROOT, "pipeline", "02_train_exits.py"))
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
+    return mod
+
+
+def test_gain_table_is_monotone_and_informative():
+    mod = _train_exits_module()
     rng = np.random.default_rng(1)
-    n = 2000
-    conf = rng.random(n)
-    correct_tri = rng.random(n) < conf
-    correct_ref = rng.random(n) < 0.9
-    edges = np.array([0.0, 0.25, 0.5, 0.75, 1.0 + 1e-9])
-    table, counts = mod.gain_table(conf, correct_tri, correct_ref, rng.random(n) < 0.2,
-                                   np.ones(n), edges, 20.0)
-    assert table.shape == (4, 2) and (table >= 0).all() and counts.sum() == n
-    assert table[0, 0] > table[-1, 0], "unsure triage frames should gain more from refinement"
+    n = 3000
+    p_animal = rng.random(n)
+    is_animal = rng.random(n) < p_animal
+    values = np.where(is_animal, 1.0, 0.1)
+    # Refinement helps animal frames (species gets fixed), not empties.
+    correct_tri = np.where(is_animal, rng.random(n) < 0.3, rng.random(n) < 0.9)
+    correct_ref = np.where(is_animal, rng.random(n) < 0.8, rng.random(n) < 0.9)
+    edges = np.linspace(0, 1, 6)
+    edges[-1] += 1e-9
+    table, raw, counts = mod.gain_table(p_animal, correct_tri, correct_ref, values, edges, 20.0)
+    assert table.shape == (5,) and (table >= 0).all() and counts.sum() == n
+    assert np.all(np.diff(table) >= -1e-12), "gain must be non-decreasing in p_animal"
+    assert table[-1] > table[0] + 0.1, "likely-animal frames should gain much more"
+
+
+def test_isotonic_regression():
+    mod = _train_exits_module()
+    y = np.array([0.1, 0.5, 0.3, 0.2, 0.9])
+    w = np.ones(5)
+    out = mod.isotonic_increasing(y, w)
+    assert np.all(np.diff(out) >= -1e-12)
+    assert np.isclose(out.sum(), y.sum()), "pooling must preserve the weighted total"
+    assert np.allclose(mod.isotonic_increasing(np.arange(5.0), w), np.arange(5.0))

@@ -1,19 +1,15 @@
 #!/usr/bin/env python
 """Download everything the pipeline needs. Every link is also listed in DATASETS.md.
 
-    python pipeline/00_fetch_datasets.py                  # everything (~6.6 GB)
-    python pipeline/00_fetch_datasets.py --only annotations pvgis weights
-    python pipeline/00_fetch_datasets.py --only images    # the big one, resumable
+    python pipeline/00_fetch_datasets.py --corpus cct20        # development corpus (~6.6 GB)
+    python pipeline/00_fetch_datasets.py --corpus serengeti    # test corpus (~17 GB transferred, ~1 GB kept)
+    python pipeline/00_fetch_datasets.py --corpus cct20 --only annotations pvgis
 
-Groups:
-    annotations  CCT20 annotation JSONs and official splits      3 MB
-    images       CCT20 images, downsized to <=1024 px          6.49 GB
-    pvgis        hourly irradiance + air temperature per site    ~2 MB per site
-    weights      MobileNetV3-Large ImageNet weights               22 MB
-    cct_meta     full Caltech Camera Traps metadata (optional)    9 MB
+Groups for cct20:     annotations images pvgis weights
+Groups for serengeti: metadata images pvgis weights
 
-No account, API key or GPU is needed. The image download resumes where it
-stopped if interrupted: just run the same command again.
+No account, API key or GPU is needed. Every download resumes if interrupted:
+run the same command again.
 """
 import os
 import sys
@@ -23,19 +19,16 @@ import zipfile
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from sunsched.cli import base_parser, banner, load_cfg, write_json
+from sunsched.cli import banner, base_parser, load_cfg, write_json
 from sunsched.config import SITES, pvgis_range
 
 LILA = "https://storage.googleapis.com/public-datasets-lila/caltechcameratraps"
-FILES = {
+CCT_FILES = {
     "annotations": dict(url=f"{LILA}/eccv_18_annotations.tar.gz",
                         dest="cct20/eccv_18_annotations.tar.gz", bytes=2997071),
     "images": dict(url=f"{LILA}/eccv_18_all_images_sm.tar.gz",
                    dest="cct20/eccv_18_all_images_sm.tar.gz", bytes=6492615601),
-    "cct_meta": dict(url=f"{LILA}/labels/caltech_camera_traps.json.zip",
-                     dest="cct_full/caltech_camera_traps.json.zip", bytes=None),
 }
-DEFAULT_GROUPS = ["annotations", "images", "pvgis", "weights"]
 
 
 def download(url: str, path: str, expected: int = None) -> bool:
@@ -50,7 +43,7 @@ def download(url: str, path: str, expected: int = None) -> bool:
     have = os.path.getsize(part) if os.path.exists(part) else 0
     for attempt in range(1, 6):
         try:
-            headers = {"User-Agent": "SunSched/2.0"}
+            headers = {"User-Agent": "SunSched/2.1"}
             if have:
                 headers["Range"] = f"bytes={have}-"
             req = urllib.request.Request(url, headers=headers)
@@ -58,9 +51,8 @@ def download(url: str, path: str, expected: int = None) -> bool:
                 if have and r.status != 206:        # server ignored the range: start over
                     have = 0
                 total = have + int(r.headers.get("Content-Length", 0))
-                mode = "ab" if have else "wb"
                 t0, last = time.time(), 0.0
-                with open(part, mode) as f:
+                with open(part, "ab" if have else "wb") as f:
                     while True:
                         chunk = r.read(1 << 20)
                         if not chunk:
@@ -84,12 +76,13 @@ def download(url: str, path: str, expected: int = None) -> bool:
             print(f"\n  attempt {attempt} failed: {e}")
             have = os.path.getsize(part) if os.path.exists(part) else 0
             time.sleep(min(30, 5 * attempt))
-    print(f"  giving up on {url}; re-run this script to resume from {have / 1e9:.2f} GB")
+    print(f"  giving up on {url}; re-run this script to resume")
     return False
 
 
-def fetch_annotations(cfg) -> bool:
-    spec = FILES["annotations"]
+# -- CCT20 (development) ---------------------------------------------------------
+def cct_annotations(cfg) -> bool:
+    spec = CCT_FILES["annotations"]
     path = os.path.join(cfg.data.root, spec["dest"])
     if not download(spec["url"], path, spec["bytes"]):
         return False
@@ -97,17 +90,42 @@ def fetch_annotations(cfg) -> bool:
         with tarfile.open(path, "r:gz") as t:
             t.extractall(os.path.dirname(path))
     n = len([f for f in os.listdir(cfg.data.annotations_dir) if f.endswith(".json")])
-    print(f"  annotations: {n} split files in {cfg.data.annotations_dir}")
+    print(f"  {n} split files in {cfg.data.annotations_dir}")
     return n == 5
 
 
-def fetch_images(cfg) -> bool:
-    spec = FILES["images"]
-    print("  6.49 GB. Resumable: if it stops, run the same command again.")
-    print("  The pipeline reads images straight out of the archive; do not extract it.")
+def cct_images(cfg) -> bool:
+    spec = CCT_FILES["images"]
+    print("  6.49 GB, resumable. Do not extract it; the pipeline streams from the archive.")
     return download(spec["url"], os.path.join(cfg.data.root, spec["dest"]), spec["bytes"])
 
 
+# -- Snapshot Serengeti (test) -----------------------------------------------------
+def serengeti_metadata(cfg) -> bool:
+    from sunsched.data import serengeti as S
+    ok = download(S.metadata_url(cfg.data.serengeti_season), S.metadata_zip_path(cfg))
+    ok = download(S.SPLITS_URL, S.splits_path(cfg)) and ok
+    if ok:
+        records, names, stats = S.parse_records(S.load_metadata(cfg))
+        print(f"  season {cfg.data.serengeti_season}: {stats}")
+    return ok
+
+
+def serengeti_images(cfg) -> bool:
+    from sunsched.data import serengeti as S
+    from sunsched.vision.backbone import input_size
+    records, names, _ = S.parse_records(S.load_metadata(cfg))
+    roles = S.select(records, S.load_splits(cfg), cfg)
+    for role, recs in roles.items():
+        print(f"  {role:<6} {len(recs):6,} images from {len({r.location for r in recs}):3d} cameras")
+    h, w = input_size(max(cfg.vision.resolutions), cfg.vision.aspect)
+    wanted = [r for recs in roles.values() for r in recs]
+    counts = S.download_images(wanted, cfg, h, w, workers=8)
+    print(f"  {counts}")
+    return counts.get("failed", 0) <= 0.01 * max(len(wanted), 1)
+
+
+# -- shared ------------------------------------------------------------------------
 def fetch_pvgis(cfg) -> bool:
     from sunsched.env.solar import fetch_pvgis
     start, end = pvgis_range()
@@ -134,43 +152,33 @@ def fetch_weights() -> bool:
         return False
 
 
-def fetch_cct_meta(cfg) -> bool:
-    spec = FILES["cct_meta"]
-    path = os.path.join(cfg.data.root, spec["dest"])
-    if not download(spec["url"], path, spec["bytes"]):
-        return False
-    with zipfile.ZipFile(path) as z:
-        z.extractall(os.path.dirname(path))
-    return True
-
-
 def main():
     ap = base_parser(__doc__)
-    ap.add_argument("--only", nargs="*", default=None,
-                    help="annotations images pvgis weights cct_meta")
+    ap.add_argument("--only", nargs="*", default=None)
     args = ap.parse_args()
     cfg = load_cfg(args)
-    groups = args.only or DEFAULT_GROUPS
-
-    runners = dict(annotations=lambda: fetch_annotations(cfg), images=lambda: fetch_images(cfg),
-                   pvgis=lambda: fetch_pvgis(cfg), weights=fetch_weights,
-                   cct_meta=lambda: fetch_cct_meta(cfg))
+    if cfg.data.corpus == "cct20":
+        runners = dict(annotations=lambda: cct_annotations(cfg), images=lambda: cct_images(cfg),
+                       pvgis=lambda: fetch_pvgis(cfg), weights=fetch_weights)
+    else:
+        runners = dict(metadata=lambda: serengeti_metadata(cfg), images=lambda: serengeti_images(cfg),
+                       pvgis=lambda: fetch_pvgis(cfg), weights=fetch_weights)
+    groups = args.only or list(runners)
     results = {}
     for g in groups:
         if g not in runners:
-            raise SystemExit(f"unknown group {g}; choose from {sorted(runners)}")
-        banner(f"fetch: {g}")
+            raise SystemExit(f"unknown group {g} for corpus {cfg.data.corpus}; choose from {sorted(runners)}")
+        banner(f"fetch {cfg.data.corpus}: {g}")
         results[g] = bool(runners[g]())
 
     banner("summary")
     for g, ok in results.items():
         print(f"  {g:<12} {'ok' if ok else 'FAILED'}")
-    write_json(os.path.join(cfg.data.root, "fetch_manifest.json"),
-               dict(results=results, files=FILES))
+    write_json(os.path.join(cfg.data.root, f"fetch_manifest_{cfg.data.corpus}.json"), dict(results=results))
     if not all(results.values()):
         print("\nSome downloads failed. Re-run to resume; see DATASETS.md for manual links.")
         return 1
-    print("\nAll data present. Next: python run_sunsched.py --skip-fetch")
+    print(f"\nAll data present. Next: python run_sunsched.py --corpus {cfg.data.corpus} --skip-fetch")
     return 0
 
 

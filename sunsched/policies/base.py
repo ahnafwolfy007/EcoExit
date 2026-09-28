@@ -73,8 +73,11 @@ class Policy:
         """'triage' (default), 'direct' (skip triage, run tier B now), or 'drop'."""
         return "triage"
 
-    def post_triage(self, obs: Obs, frame: int, pred: int, conf: float, gain: float) -> str:
-        """'final', 'now', or 'defer'."""
+    def post_triage(self, obs: Obs, frame: int, pred: int, conf: float, gain: float,
+                    p_animal: float) -> str:
+        """'final', 'now', or 'defer'. `conf` is the species head's top-1
+        probability, `p_animal` the triage detector's probability that the frame
+        is not empty, `gain` the expected value of refining it."""
         return "final"
 
     def now_op(self, obs: Obs) -> str:

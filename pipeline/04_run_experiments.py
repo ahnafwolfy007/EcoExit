@@ -1,49 +1,45 @@
 #!/usr/bin/env python
-"""Main comparison: every policy x every held-out camera x every weather year x each regime.
+"""Main experiment: every policy across the battery-autonomy x harvest-ratio grid.
 
-    python pipeline/04_run_experiments.py
+    python pipeline/04_run_experiments.py --corpus cct20
 
-Writes outputs/results/tables/runs.csv (one row per simulated deployment),
-summary.csv (mean and 95% bootstrap CI per policy and regime), and tests.csv
-(paired Wilcoxon tests of SunSched against every other policy, Holm-corrected).
+Baselines and SunSched v2 run in every cell; the ablations run at the probe
+cells only. Replicates are every eval camera x every weather year, paired
+across policies.
+
+Writes results/tables/runs.csv (one row per simulated deployment),
+summary.csv (mean and 95% bootstrap CI per cell and policy), and
+run_manifest.json (git commit and full configuration: the record that the
+test-corpus run used the frozen, pre-registered setup).
 """
 import os
+import subprocess
 import sys
+from datetime import datetime
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import numpy as np
-
-from sunsched.cli import banner, base_parser, load_cfg, write_csv
-from sunsched.eval.stats import aggregate, holm, paired_wilcoxon
-from sunsched.experiment import ABLATIONS, BASELINES, OURS, make_jobs, run_jobs
+from sunsched.cli import banner, base_parser, load_cfg, write_csv, write_json
+from sunsched.eval.stats import aggregate
+from sunsched.experiment import (ABLATIONS, BASELINES, OURS, config_to_dict, grid_cells,
+                                 make_jobs, run_jobs)
 
 KEY_METRICS = ["value_score", "gain_captured", "accuracy", "macro_f1", "animal_recall",
                "dropped_frac", "refined_now_frac", "refined_later_frac", "latency_mean_h",
                "latency_p95_h", "b_wakes_per_day", "soc_mean", "frac_time_soc_above_90",
-               "battery_temp_mean_c", "f_calendar_per_year", "f_cycle_per_year",
-               "calendar_share", "battery_years_to_eol", "replacements_per_deployment",
-               "battery_kgco2e_per_deployment", "curtailed_kj", "dead_frac", "reserve_coverage"]
-TEST_METRICS = ["value_score", "battery_years_to_eol", "animal_recall", "dropped_frac"]
+               "f_calendar_per_year", "f_cycle_per_year", "calendar_share",
+               "battery_years_to_eol", "replacements_per_deployment", "curtailed_kj",
+               "dead_frac", "reserve_coverage", "ceiling_mean"]
 
 
-def paired_tests(rows, reference="sunsched"):
-    out = []
-    for ratio in sorted({r["ratio"] for r in rows}):
-        rr = [r for r in rows if r["ratio"] == ratio and "error" not in r]
-        others = sorted({r["policy"] for r in rr} - {reference})
-        for metric in TEST_METRICS:
-            ref = {(r["location"], r["year"]): r[metric] for r in rr if r["policy"] == reference}
-            tests = []
-            for p in others:
-                oth = {(r["location"], r["year"]): r[metric] for r in rr if r["policy"] == p}
-                keys = sorted(set(ref) & set(oth))
-                t = paired_wilcoxon([ref[k] for k in keys], [oth[k] for k in keys])
-                tests.append(dict(ratio=ratio, metric=metric, policy=reference, versus=p, **t))
-            for t, h in zip(tests, holm([t["p_value"] for t in tests])):
-                t.update(h)
-            out.extend(tests)
-    return out
+def git_state() -> dict:
+    def run(*a):
+        try:
+            return subprocess.run(["git", *a], capture_output=True, text=True, timeout=10).stdout.strip()
+        except Exception:
+            return ""
+    return dict(commit=run("rev-parse", "HEAD") or "unknown",
+                dirty=bool(run("status", "--porcelain", "--", "sunsched", "pipeline")))
 
 
 def main():
@@ -51,29 +47,40 @@ def main():
     ap.add_argument("--policies", nargs="*", default=None)
     args = ap.parse_args()
     cfg = load_cfg(args)
-
-    policies = args.policies or (BASELINES + OURS + ABLATIONS)
-    banner(f"main comparison at site {cfg.experiment.main_site}, regimes {list(cfg.experiment.ratios)}")
-    jobs = make_jobs(cfg, policies, cfg.experiment.ratios)
-    rows = run_jobs(jobs, cfg.experiment.n_workers, "main")
     tables = f"{cfg.results_dir}/tables"
+
+    state = git_state()
+    write_json(f"{tables}/run_manifest.json", dict(
+        started=datetime.now().isoformat(timespec="seconds"), corpus=cfg.data.corpus,
+        quick=bool(args.quick), git=state, config=config_to_dict(cfg)))
+    if cfg.data.corpus == "serengeti" and state["dirty"]:
+        print("WARNING: sunsched/ or pipeline/ has uncommitted changes. PREREGISTRATION.md requires\n"
+              "the test-corpus run to use committed code; commit first or report this run as exploratory.")
+
+    main_policies = args.policies or (BASELINES + OURS)
+    banner(f"{cfg.data.corpus}: {len(main_policies)} policies x {len(grid_cells(cfg))} cells")
+    rows = run_jobs(make_jobs(cfg, main_policies, grid_cells(cfg)), cfg.experiment.n_workers, "grid")
+    if not args.policies:
+        banner(f"ablations at probe cells {list(cfg.experiment.probe_cells)}")
+        rows += run_jobs(make_jobs(cfg, ABLATIONS, cfg.experiment.probe_cells),
+                         cfg.experiment.n_workers, "ablations")
     write_csv(f"{tables}/runs.csv", rows)
 
     ok = [r for r in rows if "error" not in r]
-    summary = aggregate(ok, ["ratio", "policy"], KEY_METRICS, cfg.experiment.ci_level,
+    summary = aggregate(ok, ["autonomy", "ratio", "policy"], KEY_METRICS, cfg.experiment.ci_level,
                         cfg.experiment.n_bootstrap)
     write_csv(f"{tables}/summary.csv", summary)
-    write_csv(f"{tables}/tests.csv", paired_tests(ok))
 
-    for ratio in cfg.experiment.ratios:
-        print(f"\n  harvest-to-demand ratio {ratio}")
-        print(f"  {'policy':<24}{'value':>8}{'recall':>8}{'dropped':>8}{'lat p95 h':>10}"
-              f"{'batt yrs':>10}{'SoC>90%':>9}{'wakes/d':>8}")
-        for s in sorted((s for s in summary if s["ratio"] == ratio), key=lambda s: -s["value_score"]):
-            print(f"  {s['policy']:<24}{s['value_score']:8.3f}{s['animal_recall']:8.3f}"
-                  f"{s['dropped_frac']:8.3f}{s['latency_p95_h']:10.1f}{s['battery_years_to_eol']:10.2f}"
-                  f"{s['frac_time_soc_above_90'] * 100:8.1f}%{s['b_wakes_per_day']:8.2f}")
-    print(f"\n  wrote {tables}/runs.csv, summary.csv, tests.csv")
+    print(f"\n  value score / battery years, mean over cameras x years")
+    pols = [p for p in BASELINES + OURS if any(s["policy"] == p for s in summary)]
+    print(f"  {'autonomy':>8} {'ratio':>5} " + "".join(f"{p[:13]:>15}" for p in pols))
+    for a in cfg.experiment.autonomy_days:
+        for r in cfg.experiment.ratios:
+            cells = {s["policy"]: s for s in summary if s["autonomy"] == a and s["ratio"] == r}
+            print(f"  {a:>8} {r:>5} " + "".join(
+                f"{cells[p]['value_score']:>8.3f}/{cells[p]['battery_years_to_eol']:<5.1f}" if p in cells else f"{'-':>15}"
+                for p in pols))
+    print(f"\n  wrote {tables}/runs.csv, summary.csv, run_manifest.json")
 
 
 if __name__ == "__main__":
