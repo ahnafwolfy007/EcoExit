@@ -9,6 +9,8 @@ frontier     each tunable policy traced across its own knob, so policies are
 regime       key policies across the harvest-to-demand ratio
 sensitivity  one assumption at a time pushed to both ends of its range. A
              conclusion that flips inside these ranges is not a result.
+autonomy     how many days of load the battery holds, which decides whether
+             scheduling within a day can matter at all
 """
 import os
 import sys
@@ -43,6 +45,20 @@ SENSITIVITY = [
     # risk-controlled part of the method does any work.
     ("control.min_ceiling", 0.15, 0.5),
 ]
+
+# Days of load the battery holds. At this node's duty cycle the default 10 Wh
+# is about 175 days, where one night's reserve is 0.3% of the store: the charge
+# ceiling clips to control.min_ceiling, the cell turns under one equivalent full
+# cycle a year and ages by calendar, and nothing that schedules within a day can
+# differ from simply charging to that floor. Note that the capacity_wh row of
+# SENSITIVITY (5-40 Wh) never leaves that regime either: even 5 Wh is ~87 days.
+# The whole curve is reported, not a chosen point on it.
+AUTONOMY_DAYS = (0.5, 1.0, 2.0, 3.0, 5.0, 10.0, 30.0, 100.0, 175.0)
+AUTONOMY_POLICIES = KEY_POLICIES + ["sunsched_no_conformal", "sunsched_no_ceiling"]
+# Carried alongside METRICS so the curve shows not just whether sunsched wins,
+# but whether mechanism 3 was ever able to bind.
+AUTONOMY_METRICS = ["ceiling_at_floor_frac", "reserve_coverage", "soc_mean",
+                    "equiv_full_cycles_per_year", "capacity_wh", "days_of_autonomy"]
 
 
 def frontier(cfg):
@@ -101,14 +117,36 @@ def sensitivity(cfg):
                         cfg.experiment.ci_level, cfg.experiment.n_bootstrap))
 
 
+def autonomy(cfg):
+    """Does scheduling in time ever pay, and below what battery size?
+
+    The pre-registered kill test ran at one sizing, which turned out to sit far
+    inside the regime where no schedule can help. This sweep is exploratory: it
+    reports every autonomy level rather than selecting one, so it answers where
+    the method could work without tuning anything to make it pass.
+    """
+    jobs = []
+    for d in AUTONOMY_DAYS:
+        jobs += make_jobs(cfg, AUTONOMY_POLICIES, cfg.experiment.ratios, autonomy_days=d,
+                          tags=dict(sweep="autonomy_days", value=d))
+    rows = run_jobs(jobs, cfg.experiment.n_workers, "autonomy")
+    write_csv(f"{cfg.results_dir}/tables/autonomy_runs.csv", rows)
+    ok = [r for r in rows if "error" not in r]
+    write_csv(f"{cfg.results_dir}/tables/autonomy.csv",
+              aggregate(ok, ["tag_value", "ratio", "policy"], METRICS + AUTONOMY_METRICS,
+                        cfg.experiment.ci_level, cfg.experiment.n_bootstrap))
+
+
 def main():
     ap = base_parser(__doc__)
-    ap.add_argument("--only", nargs="*", default=["frontier", "regime", "sensitivity"])
+    ap.add_argument("--only", nargs="*",
+                    default=["frontier", "regime", "sensitivity", "autonomy"])
     args = ap.parse_args()
     cfg = load_cfg(args)
     for name in args.only:
         banner(f"sweep: {name}")
-        {"frontier": frontier, "regime": regime, "sensitivity": sensitivity}[name](cfg)
+        {"frontier": frontier, "regime": regime, "sensitivity": sensitivity,
+         "autonomy": autonomy}[name](cfg)
 
 
 if __name__ == "__main__":

@@ -4,6 +4,7 @@
     python run_sunsched.py --quick          # smoke test (after downloading the data)
     python run_sunsched.py                  # full run
     python run_sunsched.py --skip-fetch     # data already downloaded
+    python run_sunsched.py --device cuda    # stages 1-2 on the GPU
     python run_sunsched.py --from 4         # resume from a stage
 
 Stages:
@@ -37,6 +38,8 @@ def main():
     ap.add_argument("--from", dest="start", type=int, default=0, help="first stage to run")
     ap.add_argument("--solar", choices=["pvgis", "analytic"], default=None)
     ap.add_argument("--workers", type=int, default=0)
+    ap.add_argument("--device", choices=["cpu", "cuda", "auto"], default="cpu",
+                    help="where stages 1-2 run; stages 3-7 are numpy and ignore it")
     ap.add_argument("--out", default="./outputs")
     ap.add_argument("--data", default="./data")
     args = ap.parse_args()
@@ -48,6 +51,8 @@ def main():
         common += ["--solar", args.solar]
     if args.workers:
         common += ["--workers", str(args.workers)]
+    if args.device != "cpu":
+        common += ["--device", args.device]
 
     t_all = time.time()
     verdict = None

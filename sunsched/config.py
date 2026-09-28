@@ -34,8 +34,12 @@ class DataCfg:
 @dataclass
 class VisionCfg:
     # Pretrained ImageNet trunk, frozen. Only small exit heads are trained, so
-    # the whole vision stage runs on CPU.
+    # the whole vision stage runs on CPU by default.
     backbone: str = "mobilenet_v3_large"
+    # "cpu", "cuda" or "auto", set by --device. Feature extraction and head
+    # training only, and it changes speed, not results: see
+    # sunsched/vision/device.py for why the device cannot move a number here.
+    device: str = "cpu"
     # Indices into torchvision's mobilenet_v3_large().features. 6 ends the
     # 40-channel stage, 12 the 112-channel stage, 16 is the final 960-channel conv.
     taps: Tuple[int, ...] = (6, 12, 16)

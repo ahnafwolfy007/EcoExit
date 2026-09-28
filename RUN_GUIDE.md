@@ -1,7 +1,8 @@
 # Running SunSched
 
 This guide takes a fresh machine to a finished `REPORT.md`. Everything runs on a
-CPU; no GPU and no hardware are needed.
+CPU; no GPU and no hardware are needed. A GPU is optional and only shortens
+stages 1 and 2 -- see [5b](#5b-optional-stages-1-and-2-on-a-gpu).
 
 > The folders `ecoexit/`, `scripts/`, `tests/` and `run_all.py` are the **old v1
 > code**. Ignore them. Everything below uses `sunsched/`, `pipeline/` and
@@ -15,6 +16,7 @@ CPU; no GPU and no hardware are needed.
 | Disk | about **10 GB** free: 6.5 GB image archive, about 1 GB of cached features, plus outputs |
 | RAM | 8 GB or more |
 | CPU | any; more cores make the simulation stages faster |
+| GPU | not needed. An NVIDIA GPU shortens stages 1-2 only, via `--device cuda` |
 | Network | needed for the downloads and for PVGIS on first use; later runs use the cache |
 
 ## 1. Set up
@@ -97,6 +99,34 @@ Rough timing on an 8-core laptop CPU. Your machine will differ.
 | 7 | Report | seconds |
 
 For a first pass, `--skip-sweeps` skips stage 5 (the kill test and report still run).
+
+## 5b. Optional: stages 1 and 2 on a GPU
+
+```bash
+python run_sunsched.py --skip-fetch --device cuda
+```
+
+`--device` takes `cpu` (the default), `cuda`, or `auto` (CUDA when present).
+`cuda` fails loudly if this venv holds the CPU-only torch build, rather than
+silently falling back.
+
+Only stages 1 and 2 use it. Stages 3-7 are numpy simulation across worker
+processes and ignore it entirely, so plan for roughly half the wall-clock at
+best. Stage 1 also spends much of its time decoding JPEGs and reading the
+archive, which no GPU helps with.
+
+**This cannot move a result.** The one energy input measured from the network is
+its MAC count, counted from layer shapes in `sunsched/vision/cost.py`, and shapes
+do not depend on the device; the node model then multiplies them by an assumed
+energy per MAC. The MAC counts are bit-identical on CPU and CUDA. TF32 is turned
+off (`sunsched/vision/device.py`) so cached features stay as close to a CPU run as
+the hardware allows: the measured gap is ~1e-8, about 500x below the float16 step
+the features are stored at. The device used is recorded in
+`outputs/artifacts/features/meta.json`.
+
+> This is the one place v2 differs from v1, where `scripts/02_profile_energy.py`
+> timed the network on a CPU and fed those wall-clock timings into the energy
+> model. There the device was a scientific choice; here it is not.
 
 If a stage fails, fix the error and resume from it instead of starting over:
 

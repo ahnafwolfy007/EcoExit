@@ -27,11 +27,13 @@ class TrainedHead:
 
     def logits(self, X: np.ndarray, batch: int = 4096) -> np.ndarray:
         self.head.eval()
+        dev = next((p.device for p in self.head.parameters()), torch.device("cpu"))
         Z = (X.astype(np.float32) - self.mean) / self.std
         outs = []
         with torch.no_grad():
             for i in range(0, len(Z), batch):
-                outs.append(self.head(torch.from_numpy(Z[i:i + batch])).numpy())
+                chunk = torch.from_numpy(Z[i:i + batch]).to(dev)
+                outs.append(self.head(chunk).cpu().numpy())
         return np.concatenate(outs) if outs else np.zeros((0, self.head.net[-1].out_features))
 
     def probs(self, X: np.ndarray) -> np.ndarray:
@@ -54,7 +56,7 @@ def class_weights(y: np.ndarray, n_classes: int) -> np.ndarray:
 
 def train_head(X: np.ndarray, y: np.ndarray, n_classes: int, hidden: int, dropout: float,
                epochs: int, lr: float, weight_decay: float, seed: int,
-               batch: int = 256, log=None) -> TrainedHead:
+               batch: int = 256, log=None, device=None) -> TrainedHead:
     """A fixed recipe with no tuning on held-out data: the only choices made
     after looking at held-out data are the temperatures, fitted on the
     calibration split, which never contributes a simulated deployment."""
@@ -62,20 +64,23 @@ def train_head(X: np.ndarray, y: np.ndarray, n_classes: int, hidden: int, dropou
     rng = np.random.default_rng(seed)
     mean = X.mean(axis=0).astype(np.float32)
     std = (X.std(axis=0) + 1e-6).astype(np.float32)
-    Z = torch.from_numpy(((X - mean) / std).astype(np.float32))
-    T = torch.from_numpy(y.astype(np.int64))
+    # The cached features fit on the device whole, so the epoch loop indexes
+    # them there and never crosses the bus.
+    dev = torch.device("cpu") if device is None else torch.device(device)
+    Z = torch.from_numpy(((X - mean) / std).astype(np.float32)).to(dev)
+    T = torch.from_numpy(y.astype(np.int64)).to(dev)
 
-    head = ExitHead(X.shape[1], hidden, n_classes, dropout)
+    head = ExitHead(X.shape[1], hidden, n_classes, dropout).to(dev)
     opt = torch.optim.AdamW(head.parameters(), lr=lr, weight_decay=weight_decay)
     sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=epochs)
-    w = torch.from_numpy(class_weights(y, n_classes))
+    w = torch.from_numpy(class_weights(y, n_classes)).to(dev)
 
     for ep in range(epochs):
         head.train()
         perm = rng.permutation(len(Z))
         total = 0.0
         for i in range(0, len(perm), batch):
-            idx = torch.from_numpy(perm[i:i + batch])
+            idx = torch.from_numpy(perm[i:i + batch]).to(dev)
             loss = F.cross_entropy(head(Z[idx]), T[idx], weight=w, label_smoothing=0.05)
             opt.zero_grad()
             loss.backward()

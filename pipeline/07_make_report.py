@@ -243,6 +243,36 @@ def main():
     else:
         A("_Run pipeline/05_sweeps.py --only sensitivity._")
 
+    auto = load(f"{T}/autonomy.csv")
+    A("\n## 7b. Battery autonomy: can scheduling matter at all?\n")
+    if auto:
+        A("Days of load the battery holds, swept as a first-class axis rather than fixed. "
+          "`ceil@floor` is the fraction of slots where the conformal ceiling was clipped to "
+          "`control.min_ceiling`: near 1, the risk-controlled reserve cannot steer the battery "
+          "whatever its coverage, the cell ages by calendar, and the comparison measures that "
+          "floor rather than the schedule.\n")
+        A("This sweep is **exploratory, not pre-registered**. The kill test in section 4 stands "
+          "as the pre-registered result at the default sizing. Every level is reported here "
+          "precisely so that no single one is selected after the fact.\n")
+        A("| days | ratio | sunsched value | vs ee_now | vs ceiling_now | vs lazy_defer | life x best | ceil@floor |")
+        A("|---|---|---|---|---|---|---|---|")
+        for d in sorted({r["tag_value"] for r in auto}):
+            for ratio in sorted({r["ratio"] for r in auto}):
+                rr = [r for r in auto if r["tag_value"] == d and r["ratio"] == ratio]
+                ours = next((r for r in rr if r["policy"] == "sunsched"), None)
+                base = {r["policy"]: r for r in rr
+                        if r["policy"] in ("ee_now", "ceiling_now", "lazy_defer")}
+                if not ours or len(base) < 3:
+                    continue
+                best = max(base.values(), key=lambda r: r["value_score"])
+                dv = lambda p: ours["value_score"] - base[p]["value_score"]
+                A(f"| {d:g} | {ratio:g} | {ours['value_score']:.3f} | {dv('ee_now'):+.3f} "
+                  f"| {dv('ceiling_now'):+.3f} | {dv('lazy_defer'):+.3f} "
+                  f"| x{ours['battery_years_to_eol'] / max(best['battery_years_to_eol'], 1e-9):.2f} "
+                  f"| {ours['ceiling_at_floor_frac']:.2f} |")
+    else:
+        A("_Run pipeline/05_sweeps.py --only autonomy._")
+
     A("\n## 8. What is assumed, not measured\n")
     A("- No hardware: node power figures are datasheet-typical assumptions (`NodeCfg`), swept in section 7.")
     A("- Battery ageing uses the Xu et al. (IEEE Trans. Smart Grid 2018) semi-empirical model; "
@@ -252,9 +282,14 @@ def main():
       "include daylight saving time.")
     A("- Captures from several calendar years at one camera are laid onto one simulated year.")
     A("- MAC counts are measured from the real network; energy per MAC is assumed.")
-    A("- If `sunsched` and `sunsched_no_conformal` coincide in section 3, the charge ceiling sat on "
-      "`control.min_ceiling` and the conformal reserve did no work at this battery size; check the "
-      "`control.min_ceiling` and `battery.capacity_wh` rows of section 7 before claiming it.")
+    A("- `sunsched` and `sunsched_no_conformal` differ only in the reserve forecaster, so compare "
+      "them on `reserve_coverage` in `tables/runs.csv`: the conformal bound should sit near "
+      "1 - alpha and the point forecast well below it. Meeting that target is not the same as "
+      "steering the battery. If `ceiling_at_floor_frac` is near 1, the bound was clipped to "
+      "`control.min_ceiling` before it reached the cell, and no lifetime difference may be "
+      "credited to the reserve however good its coverage looks. That is what happens when the "
+      "battery holds many days of load: see `days_of_autonomy` in `environment_summary.json`, "
+      "and the `control.min_ceiling` and `battery.capacity_wh` rows of section 7.")
 
     with open(f"{cfg.results_dir}/REPORT.md", "w", encoding="utf-8") as f:
         f.write("\n".join(L) + "\n")

@@ -1,0 +1,25 @@
+{
+  "n_animal_captures": 53850,
+  "site": "cct_region",
+  "events_sun_below_horizon": 0.5574744661095636,
+  "events_sun_below_15deg": 0.64644382544104,
+  "events_sun_above_40deg": 0.1790343546889508,
+  "energy_sun_below_15deg": 0.05572504479995882,
+  "energy_sun_above_40deg": 0.5435874414405826,
+  "pearson_hourly_events_vs_energy": -0.16670625004315,
+  "note": "capture clock times are camera clocks; DST handling is unknown (up to 1 h in summer)",
+  "battery_capacity_wh": 10.0,
+  "mean_daily_demand_j": 206.0,
+  "days_of_autonomy": 174.8,
+  "energy_per_action_j": {
+    "sleep_per_slot": 0.6,
+    "capture_day": 0.4,
+    "capture_night": 1.2,
+    "triage": 0.05102482944,
+    "store": 0.02,
+    "tier_b_wake": 12.0,
+    "refine_lite": 0.375572672,
+    "refine_full": 0.507017312
+  },
+  "solar_source": "pvgis"
+}

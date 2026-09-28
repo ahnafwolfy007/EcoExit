@@ -23,6 +23,7 @@ import torch
 from sunsched.cli import banner, base_parser, load_cfg, write_csv
 from sunsched.data import cct20
 from sunsched.eval.metrics import macro_f1
+from sunsched.vision import device as vision_device
 from sunsched.vision.cost import head_macs
 from sunsched.vision.heads import (expected_calibration_error, fit_temperature, softmax,
                                    train_head)
@@ -65,6 +66,7 @@ def main():
     args = ap.parse_args()
     cfg = load_cfg(args)
     v, task = cfg.vision, cfg.task
+    dev = vision_device.resolve(v.device)
     feat_dir = f"{cfg.artifacts_dir}/features"
     with open(f"{feat_dir}/meta.json", encoding="utf-8") as f:
         meta = json.load(f)
@@ -87,13 +89,14 @@ def main():
     cal, ev = cfg.data.calib_split, cfg.data.eval_split
 
     banner("2. exit heads")
+    print(f"  device: {vision_device.prepare(dev)}")
     heads, grid_rows, outs = {}, [], {}
     for ri in range(len(v.resolutions)):
         for ti in range(len(v.taps)):
             X_tr = np.concatenate([load_features(feat_dir, s, ri, ti) for s in cfg.data.train_splits])
             print(f"  resolution {meta['input_sizes'][ri]}, exit {ti} (tap {v.taps[ti]}, d={X_tr.shape[1]})")
             th = train_head(X_tr, y_train, nc, v.head_hidden, v.dropout, v.epochs, v.lr,
-                            v.weight_decay, v.seed, log=print)
+                            v.weight_decay, v.seed, log=print, device=dev)
             lg_cal = th.logits(load_features(feat_dir, cal, ri, ti))
             ece_before = expected_calibration_error(softmax(lg_cal).max(1),
                                                     softmax(lg_cal).argmax(1) == y[cal])
@@ -152,9 +155,11 @@ def main():
                                       calib_frames=int(counts[i, e])))
     write_csv(f"{cfg.results_dir}/tables/refinement_gain.csv", gain_rows)
     np.savez_compressed(f"{cfg.artifacts_dir}/outcomes.npz", **save)
-    torch.save({f"{ri}_{ti}": dict(state=h.head.state_dict(), mean=h.mean, std=h.std,
-                                   temperature=h.temperature) for (ri, ti), h in heads.items()},
-               f"{cfg.artifacts_dir}/heads.pt")
+    # Always stored as CPU tensors, so a checkpoint from a GPU run loads anywhere.
+    torch.save({f"{ri}_{ti}": dict(state={k: t.detach().cpu()
+                                          for k, t in h.head.state_dict().items()},
+                                   mean=h.mean, std=h.std, temperature=h.temperature)
+                for (ri, ti), h in heads.items()}, f"{cfg.artifacts_dir}/heads.pt")
     print(f"  wrote {cfg.artifacts_dir}/outcomes.npz and heads.pt")
 
 

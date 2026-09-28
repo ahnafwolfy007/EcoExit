@@ -145,6 +145,27 @@ def main():
         print(f"  camera {loc:>4}: {row['captures_per_day']:6.2f} captures/day, always-now needs "
               f"{row['always_now_kj_per_day']:.2f} kJ/day")
     write_csv(f"{cfg.results_dir}/tables/sizing.csv", rows)
+
+    # Days of autonomy: capacity over a day of essential plus inference load.
+    # This decides whether the experiment can test its own hypothesis at all.
+    # When it is large, a night's reserve is a rounding error against the store,
+    # the charge ceiling clips to control.min_ceiling, the cell ages by calendar
+    # rather than by cycling, and no policy that schedules within a day can
+    # differ from simply charging to that floor.
+    per_day = [r["always_now_kj_per_day"] * 1e3 for r in rows]
+    mean_day_j = sum(per_day) / max(len(per_day), 1)
+    autonomy = cfg.battery.capacity_wh * 3600.0 / max(mean_day_j, 1e-9)
+    summary["battery_capacity_wh"] = cfg.battery.capacity_wh
+    summary["mean_daily_demand_j"] = round(mean_day_j, 1)
+    summary["days_of_autonomy"] = round(autonomy, 1)
+    print(f"\n  battery {cfg.battery.capacity_wh:.1f} Wh ({cfg.battery.capacity_wh * 3600:.0f} J)"
+          f" vs {mean_day_j:.0f} J/day -> {autonomy:.0f} days of autonomy")
+    if autonomy > 30:
+        print("  WARNING: that is far more store than a night needs, so the conformal reserve\n"
+              "           will clip to control.min_ceiling and the battery will age almost\n"
+              "           purely by calendar. In this regime no scheduling policy can beat\n"
+              "           charging to that floor, and a kill test measures the floor, not the\n"
+              "           schedule. Size the battery in days of load, not in Wh.")
     summary["energy_per_action_j"] = dict(
         sleep_per_slot=energy.sleep_j, capture_day=energy.capture_day_j,
         capture_night=energy.capture_night_j, triage=energy.triage_j, store=energy.store_j,

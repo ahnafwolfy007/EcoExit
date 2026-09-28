@@ -31,7 +31,10 @@ def trunk_macs_at_taps(trunk: nn.Sequential, taps: Sequence[int],
 
     taps = sorted(int(t) for t in taps)
     out = {}
-    x = torch.zeros(1, 3, height, width)
+    # Follows the trunk onto whatever device it is on. The counts come from
+    # layer shapes, so they are identical either way.
+    dev = next((p.device for p in trunk.parameters()), torch.device("cpu"))
+    x = torch.zeros(1, 3, height, width, device=dev)
     with torch.no_grad():
         for i, layer in enumerate(trunk):
             x = layer(x)

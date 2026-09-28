@@ -65,12 +65,15 @@ class TapExtractor(nn.Module):
         return outs
 
 
-def to_batch(pil_images) -> torch.Tensor:
+def to_batch(pil_images, device=None) -> torch.Tensor:
     arr = np.stack([np.asarray(im, dtype=np.float32) / 255.0 for im in pil_images])
     t = torch.from_numpy(arr).permute(0, 3, 1, 2).contiguous()
-    return (t - IMAGENET_MEAN) / IMAGENET_STD
+    if device is not None:
+        t = t.to(device, non_blocking=True)
+    return (t - IMAGENET_MEAN.to(t.device)) / IMAGENET_STD.to(t.device)
 
 
 def tap_dims(extractor: TapExtractor, height: int, width: int) -> List[int]:
-    outs = extractor(torch.zeros(1, 3, height, width))
+    dev = next((p.device for p in extractor.parameters()), torch.device("cpu"))
+    outs = extractor(torch.zeros(1, 3, height, width, device=dev))
     return [int(o.shape[1]) for o in outs]

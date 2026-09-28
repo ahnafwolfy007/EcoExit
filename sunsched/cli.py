@@ -17,6 +17,10 @@ def base_parser(description: str) -> argparse.ArgumentParser:
     ap.add_argument("--solar", choices=["pvgis", "analytic"], default=None,
                     help="irradiance source (default pvgis; analytic is an offline fallback)")
     ap.add_argument("--workers", type=int, default=0, help="parallel workers (0 = cores - 1)")
+    # A bare list rather than importing sunsched.vision.device, so that stages
+    # 3-7 do not pay for importing torch just to parse their arguments.
+    ap.add_argument("--device", choices=["cpu", "cuda", "auto"], default="cpu",
+                    help="where the vision stages run; only stages 1 and 2 use it (default cpu)")
     return ap
 
 
@@ -35,6 +39,8 @@ def load_cfg(args) -> Config:
         cfg.solar.source = args.solar
     if getattr(args, "workers", 0):
         cfg.experiment.n_workers = args.workers
+    if getattr(args, "device", None):
+        cfg.vision.device = args.device
     os.makedirs(cfg.artifacts_dir, exist_ok=True)
     os.makedirs(f"{cfg.results_dir}/tables", exist_ok=True)
     os.makedirs(f"{cfg.results_dir}/figures", exist_ok=True)

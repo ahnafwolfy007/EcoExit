@@ -19,6 +19,7 @@ import torch
 
 from sunsched.cli import banner, base_parser, load_cfg, write_json
 from sunsched.data import cct20
+from sunsched.vision import device as vision_device
 from sunsched.vision.backbone import TapExtractor, input_size, load_trunk, tap_dims, to_batch
 from sunsched.vision.cost import trunk_macs_at_taps
 
@@ -31,6 +32,7 @@ def main():
     cfg = load_cfg(args)
     v = cfg.vision
     torch.set_num_threads(max(1, os.cpu_count() or 1))
+    dev = vision_device.resolve(v.device)
 
     banner("1. splits")
     ann = cfg.data.annotations_dir
@@ -51,8 +53,9 @@ def main():
     print("  trans splits share no camera with training: checked")
 
     banner("2. trunk and exit taps")
+    print(f"  device: {vision_device.prepare(dev)}")
     trunk = load_trunk(v.backbone)
-    ext = TapExtractor(trunk, v.taps).eval()
+    ext = TapExtractor(trunk, v.taps).eval().to(dev)
     sizes = [input_size(h, v.aspect) for h in v.resolutions]
     dims = [tap_dims(ext, h, w) for h, w in sizes]
     macs = {str(ri): {str(t): int(m) for t, m in trunk_macs_at_taps(trunk, v.taps, h, w).items()}
@@ -91,10 +94,10 @@ def main():
 
     def flush():
         for ri in range(len(sizes)):
-            batch = to_batch([p[2][ri] for p in pending])
+            batch = to_batch([p[2][ri] for p in pending], dev)
             outs = ext(batch)
             for ti, o in enumerate(outs):
-                o = o.numpy().astype(np.float16)
+                o = o.cpu().numpy().astype(np.float16)
                 for k, (s, row, _) in enumerate(pending):
                     buf[s][(ri, ti)][row] = o[k]
         for s, row, _ in pending:
@@ -133,7 +136,7 @@ def main():
     write_json(f"{feat_dir}/meta.json", dict(
         backbone=v.backbone, taps=list(v.taps), resolutions=list(v.resolutions),
         input_sizes=[list(x) for x in sizes], dims=dims, trunk_macs=macs, class_names=names,
-        quick=bool(args.quick), undecodable=bad, missing=missing))
+        quick=bool(args.quick), device=dev.type, undecodable=bad, missing=missing))
     print(f"  done in {(time.time() - t0) / 60:.1f} min; {bad} undecodable images skipped")
     if sum(missing.values()) > 0.02 * total:
         print("  WARNING: more than 2% of images were not found -- is the archive complete?")

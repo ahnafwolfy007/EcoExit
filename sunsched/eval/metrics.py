@@ -86,6 +86,11 @@ def energy_battery_metrics(res: SimResult, cfg, days: float) -> Dict[str, float]
         frac_time_soc_above_90=float(np.mean(soc > 0.9)),
         battery_temp_mean_c=float(res.temp_c.mean()),
         ceiling_mean=float(res.ceiling.mean()),
+        # Fraction of slots where the ceiling sat on control.min_ceiling. Near 1
+        # means the conformal bound was clipped away before it reached the
+        # battery: mechanism 3 can still meet its coverage target while steering
+        # nothing, so no lifetime difference may be credited to it.
+        ceiling_at_floor_frac=float(np.mean(res.ceiling <= cfg.control.min_ceiling + 1e-9)),
         harvested_kj=res.harvested_j / 1e3,
         consumed_kj=res.consumed_j / 1e3,
         curtailed_kj=res.curtailed_j / 1e3,

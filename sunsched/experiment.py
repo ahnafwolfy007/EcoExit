@@ -160,6 +160,14 @@ def run_job(job: dict) -> dict:
 
     energy = build_node_energy(cfg.node, outcomes.macs, cfg.slot_seconds)
     demand = always_now_demand_j(stream.slot, night, n, energy)
+    # Optional sizing axis. Fixing the battery in days of load rather than in Wh
+    # makes "autonomy" mean the same thing at every camera, whose capture rates
+    # differ threefold. It happens here because the load is only known once the
+    # stream and the node energy model exist. A night's reserve is a real
+    # fraction of a few days of store and a rounding error on a few months of
+    # it, so this is the axis that decides whether scheduling can matter at all.
+    if job.get("autonomy_days"):
+        cfg.battery.capacity_wh = float(job["autonomy_days"]) * (demand / stream.n_days) / 3600.0
     area = panel_area_m2(ratio, demand, site, cfg.solar.years, window, world, cfg)
     harvest = harvest_j(irr, area, cfg.solar, cfg.slot_seconds)
     temp = battery_temperature(sy.air_temp_c[window], irr, cfg.solar.enclosure_gain_c,
@@ -184,6 +192,8 @@ def run_job(job: dict) -> dict:
     return dict(policy=job["policy"], location=job["location"], site=site, year=year,
                 ratio=ratio, solar_source=sy.source, days=stream.n_days,
                 panel_area_cm2=area * 1e4, demand_always_now_kj=demand / 1e3,
+                capacity_wh=cfg.battery.capacity_wh,
+                days_of_autonomy=cfg.battery.capacity_wh * 3600.0 / max(demand / stream.n_days, 1e-9),
                 sim_seconds=round(time.time() - t0, 2),
                 **{k: v for k, v in job.items() if k.startswith("tag_")}, **metrics)
 
@@ -200,7 +210,8 @@ def _safe_run(job: dict) -> dict:
 
 
 def make_jobs(cfg: C.Config, policies: List[str], ratios, locations=None, years=None,
-              site: str = None, overrides: Optional[dict] = None, tags: Optional[dict] = None) -> List[dict]:
+              site: str = None, overrides: Optional[dict] = None, tags: Optional[dict] = None,
+              autonomy_days: Optional[float] = None) -> List[dict]:
     world = load_world(cfg)
     locations = locations or sorted(world["streams"])
     years = years or list(cfg.solar.years)
@@ -213,6 +224,8 @@ def make_jobs(cfg: C.Config, policies: List[str], ratios, locations=None, years=
                 for y in years:
                     job = dict(cfg=base, policy=p, location=loc, year=int(y), ratio=float(r),
                                site=site, overrides=overrides or {})
+                    if autonomy_days:
+                        job["autonomy_days"] = float(autonomy_days)
                     for k, v in (tags or {}).items():
                         job[f"tag_{k}"] = v
                     jobs.append(job)
