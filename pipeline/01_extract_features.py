@@ -18,7 +18,7 @@ import numpy as np
 import torch
 
 from sunsched.cli import banner, base_parser, load_cfg, write_json
-from sunsched.data import cct20
+from sunsched.data import cct20, source
 from sunsched.vision import device as vision_device
 from sunsched.vision.backbone import TapExtractor, input_size, load_trunk, tap_dims, to_batch
 from sunsched.vision.cost import trunk_macs_at_taps
@@ -34,23 +34,14 @@ def main():
     torch.set_num_threads(max(1, os.cpu_count() or 1))
     dev = vision_device.resolve(v.device)
 
-    banner("1. splits")
-    ann = cfg.data.annotations_dir
-    splits = {s: cct20.load_split(ann, s) for s in cct20.SPLITS}
-    names = cct20.class_names(ann)
-    cct20.check_location_disjoint(splits, cfg.data.train_splits,
-                                  [cfg.data.calib_split, cfg.data.eval_split])
-    used = list(cfg.data.train_splits) + [cfg.data.calib_split, cfg.data.eval_split]
-    if args.quick:
-        for s in cfg.data.train_splits:
-            splits[s] = cct20.subset_for_quick(splits[s], 0.2, v.seed)
-        splits[cfg.data.eval_split] = cct20.subset_for_quick(splits[cfg.data.eval_split], 1.0, v.seed,
-                                                             keep_locations=3)
+    banner(f"1. splits ({cfg.data.corpus})")
+    splits, names = source.load_splits(cfg, quick=args.quick)
+    used = source.used_splits(cfg)
     for s in used:
         locs = len({r.location for r in splits[s]})
         print(f"  {s:<11} {len(splits[s]):6d} images  {locs:2d} locations")
     print(f"  classes ({len(names)}): {', '.join(names)}")
-    print("  trans splits share no camera with training: checked")
+    print("  evaluation and calibration cameras share no camera with training: checked")
 
     banner("2. trunk and exit taps")
     print(f"  device: {vision_device.prepare(dev)}")
@@ -77,15 +68,11 @@ def main():
 
     banner("3. streaming images")
     images_dir = args.images_dir or cfg.data.images_dir
-    if images_dir:
-        source = cct20.iter_directory(images_dir, where.keys())
-        print(f"  reading folder {images_dir}")
-    else:
-        if not os.path.exists(cfg.data.images_archive):
-            raise SystemExit(f"missing {cfg.data.images_archive}\n"
-                             f"  run: python pipeline/00_fetch_datasets.py --only images")
-        source = cct20.iter_archive(cfg.data.images_archive, where.keys())
-        print(f"  streaming {cfg.data.images_archive} (one sequential pass)")
+    if cfg.data.corpus == "cct20" and not images_dir and not os.path.exists(cfg.data.images_archive):
+        raise SystemExit(f"missing {cfg.data.images_archive}\n"
+                         f"  run: python pipeline/00_fetch_datasets.py --only images")
+    images = source.image_source(cfg, where.keys(), images_dir)
+    print(f"  reading {cfg.data.corpus} images")
 
     h_max, w_max = sizes[-1]
     pending = []                                  # (split, row, [PIL per resolution])
@@ -104,7 +91,7 @@ def main():
             found[s][row] = True
         pending.clear()
 
-    for name, jpeg in source:
+    for name, jpeg in images:
         try:
             big = cct20.decode(jpeg, h_max, w_max)
             ims = [big.resize((w, h)) if (h, w) != (h_max, w_max) else big for h, w in sizes]
@@ -134,7 +121,7 @@ def main():
             np.save(f"{feat_dir}/{s}_r{ri}_t{ti}.npy", arr[keep])
         print(f"  {s:<11} {int(keep.sum()):6d} saved, {missing[s]} not found in the archive")
     write_json(f"{feat_dir}/meta.json", dict(
-        backbone=v.backbone, taps=list(v.taps), resolutions=list(v.resolutions),
+        corpus=cfg.data.corpus, backbone=v.backbone, taps=list(v.taps), resolutions=list(v.resolutions),
         input_sizes=[list(x) for x in sizes], dims=dims, trunk_macs=macs, class_names=names,
         quick=bool(args.quick), device=dev.type, undecodable=bad, missing=missing))
     print(f"  done in {(time.time() - t0) / 60:.1f} min; {bad} undecodable images skipped")

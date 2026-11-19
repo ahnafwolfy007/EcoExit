@@ -144,17 +144,46 @@ def fetch_cct_meta(cfg) -> bool:
     return True
 
 
+# -- Snapshot Serengeti (held-out test corpus; ported from the v2 branch) ----------
+def serengeti_metadata(cfg) -> bool:
+    from sunsched.data import serengeti as S
+    ok = download(S.metadata_url(cfg.data.serengeti_season), S.metadata_zip_path(cfg))
+    ok = download(S.SPLITS_URL, S.splits_path(cfg)) and ok
+    if ok:
+        records, names, stats = S.parse_records(S.load_metadata(cfg))
+        print(f"  season {cfg.data.serengeti_season}: {stats}")
+    return ok
+
+
+def serengeti_images(cfg) -> bool:
+    from sunsched.data import serengeti as S
+    from sunsched.vision.backbone import input_size
+    records, names, _ = S.parse_records(S.load_metadata(cfg))
+    roles = S.select(records, S.load_splits(cfg), cfg)
+    for role, recs in roles.items():
+        print(f"  {role:<6} {len(recs):6,} images from {len({r.location for r in recs}):3d} cameras")
+    h, w = input_size(max(cfg.vision.resolutions), cfg.vision.aspect)
+    wanted = [r for recs in roles.values() for r in recs]
+    counts = S.download_images(wanted, cfg, h, w, workers=16)
+    print(f"  {counts}")
+    return counts.get("failed", 0) <= 0.01 * max(len(wanted), 1)
+
+
 def main():
     ap = base_parser(__doc__)
     ap.add_argument("--only", nargs="*", default=None,
                     help="annotations images pvgis weights cct_meta")
     args = ap.parse_args()
     cfg = load_cfg(args)
-    groups = args.only or DEFAULT_GROUPS
-
-    runners = dict(annotations=lambda: fetch_annotations(cfg), images=lambda: fetch_images(cfg),
-                   pvgis=lambda: fetch_pvgis(cfg), weights=fetch_weights,
-                   cct_meta=lambda: fetch_cct_meta(cfg))
+    if cfg.data.corpus == "serengeti":
+        runners = dict(metadata=lambda: serengeti_metadata(cfg), images=lambda: serengeti_images(cfg),
+                       pvgis=lambda: fetch_pvgis(cfg), weights=fetch_weights)
+        groups = args.only or list(runners)
+    else:
+        groups = args.only or DEFAULT_GROUPS
+        runners = dict(annotations=lambda: fetch_annotations(cfg), images=lambda: fetch_images(cfg),
+                       pvgis=lambda: fetch_pvgis(cfg), weights=fetch_weights,
+                       cct_meta=lambda: fetch_cct_meta(cfg))
     results = {}
     for g in groups:
         if g not in runners:

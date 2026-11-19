@@ -5,11 +5,15 @@ import json
 import os
 from typing import Iterable, List
 
-from sunsched.config import Config, quick
+from sunsched.config import Config, apply_backbone, apply_corpus, quick
 
 
 def base_parser(description: str) -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(description=description)
+    ap.add_argument("--corpus", choices=["cct20", "serengeti"], default="cct20",
+                    help="cct20 = development corpus (the paper); serengeti = held-out test")
+    ap.add_argument("--backbone", choices=["mobilenet_v3_large", "resnet50"],
+                    default="mobilenet_v3_large", help="frozen trunk for stages 1-2")
     ap.add_argument("--quick", action="store_true",
                     help="smoke-test preset: fewer images, 2 weather years, 90-day season")
     ap.add_argument("--out", default="./outputs", help="where artifacts/ and results/ go")
@@ -35,6 +39,9 @@ def load_cfg(args) -> Config:
     cfg.data.images_archive = f"{root}/cct20/eccv_18_all_images_sm.tar.gz"
     cfg.data.annotations_dir = f"{root}/cct20/eccv_18_annotation_files"
     cfg.data.pvgis_dir = f"{root}/pvgis"
+    cfg.data.serengeti_dir = f"{root}/serengeti"
+    apply_corpus(cfg, getattr(args, "corpus", "cct20") or "cct20")
+    apply_backbone(cfg, getattr(args, "backbone", "mobilenet_v3_large") or "mobilenet_v3_large")
     if getattr(args, "solar", None):
         cfg.solar.source = args.solar
     if getattr(args, "workers", 0):

@@ -21,7 +21,7 @@ import numpy as np
 import torch
 
 from sunsched.cli import banner, base_parser, load_cfg, write_csv
-from sunsched.data import cct20
+from sunsched.data import source
 from sunsched.eval.metrics import macro_f1
 from sunsched.vision import device as vision_device
 from sunsched.vision.cost import head_macs
@@ -75,11 +75,11 @@ def main():
     empty_idx = names.index(task.empty_class)
 
     banner("1. labels")
-    ann = cfg.data.annotations_dir
-    used = list(cfg.data.train_splits) + [cfg.data.calib_split, cfg.data.eval_split]
+    used = source.used_splits(cfg)
+    all_splits, _ = source.load_splits(cfg, quick=args.quick)
     recs = {}
     for s in used:
-        by_id = {r.id: r for r in cct20.load_split(ann, s)}
+        by_id = {r.id: r for r in all_splits[s]}
         with open(f"{feat_dir}/{s}_ids.json", encoding="utf-8") as f:
             recs[s] = [by_id[i] for i in json.load(f)]
     y = {s: np.array([names.index(r.label) for r in recs[s]], dtype=np.int64) for s in used}

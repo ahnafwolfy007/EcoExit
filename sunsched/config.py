@@ -11,6 +11,10 @@ import json
 
 @dataclass
 class DataCfg:
+    # "cct20" is the development corpus; "serengeti" is the held-out test
+    # corpus of PREREGISTRATION.md (ported from the v2 branch for the paper
+    # revision). `apply_corpus` sets the fields that depend on it.
+    corpus: str = "cct20"
     root: str = "./data"
     cct20_dir: str = "./data/cct20"
     images_archive: str = "./data/cct20/eccv_18_all_images_sm.tar.gz"
@@ -29,6 +33,17 @@ class DataCfg:
     train_splits: Tuple[str, ...] = ("train", "cis_val", "cis_test")
     calib_split: str = "trans_val"
     eval_split: str = "trans_test"
+    # Snapshot Serengeti (test corpus). Images are fetched one by one from LILA,
+    # downscaled on arrival and cached small. The selection rule is fixed in
+    # sunsched/data/serengeti.py and PREREGISTRATION.md; these values are the
+    # ones committed there before any Serengeti data was downloaded.
+    serengeti_dir: str = "./data/serengeti"
+    serengeti_season: str = "S10"
+    serengeti_train_images: int = 10000
+    serengeti_train_empty_frac: float = 0.2
+    serengeti_calib_cameras: int = 3
+    serengeti_eval_budget: int = 15000
+    serengeti_min_eval_cameras: int = 6
 
 
 @dataclass
@@ -230,6 +245,25 @@ SITES: Dict[str, Dict] = {
     "dhaka":      dict(lat=23.81, lon=90.41, utc_offset=6, colocated=False),
     "munich":     dict(lat=48.14, lon=11.58, utc_offset=1, colocated=False),
     "bergen":     dict(lat=60.39, lon=5.32, utc_offset=1, colocated=False),
+    # Snapshot Serengeti grid, central Serengeti National Park, Tanzania.
+    "serengeti":  dict(lat=-2.33, lon=34.83, utc_offset=3, colocated=True),
+}
+
+# Per-corpus settings, copied into a Config by `apply_corpus`.
+CORPORA: Dict[str, Dict] = {
+    "cct20": dict(site="cct_region", aspect=1024 / 747, vehicle_classes=("car",),
+                  splits=(("train", "cis_val", "cis_test"), "trans_val", "trans_test")),
+    "serengeti": dict(site="serengeti", aspect=2048 / 1536, vehicle_classes=("human", "vehicle"),
+                      splits=(("train",), "calib", "eval")),
+}
+
+# Frozen trunks and their exit taps (indices into the trunk Sequential). The
+# paper uses MobileNetV3-Large; ResNet-50 is the second classifier of the
+# revision: about 19x the MACs, so it also tests a different energy balance.
+BACKBONES: Dict[str, Tuple[int, ...]] = {
+    "mobilenet_v3_large": (6, 12, 16),
+    # conv1, bn1, relu, maxpool, layer1, layer2, layer3, layer4 -> taps after layer2/3/4
+    "resnet50": (5, 6, 7),
 }
 
 
@@ -270,6 +304,27 @@ class Config:
     def save(self, path: str):
         with open(path, "w", encoding="utf-8") as f:
             json.dump(asdict(self), f, indent=2)
+
+
+def apply_corpus(cfg: "Config", name: str) -> "Config":
+    if name not in CORPORA:
+        raise ValueError(f"unknown corpus {name!r}; choose from {sorted(CORPORA)}")
+    c = CORPORA[name]
+    cfg.data.corpus = name
+    cfg.experiment.main_site = c["site"]
+    cfg.vision.aspect = c["aspect"]
+    cfg.task.vehicle_classes = tuple(c["vehicle_classes"])
+    train, calib, ev = c["splits"]
+    cfg.data.train_splits, cfg.data.calib_split, cfg.data.eval_split = tuple(train), calib, ev
+    return cfg
+
+
+def apply_backbone(cfg: "Config", name: str) -> "Config":
+    if name not in BACKBONES:
+        raise ValueError(f"unknown backbone {name!r}; choose from {sorted(BACKBONES)}")
+    cfg.vision.backbone = name
+    cfg.vision.taps = BACKBONES[name]
+    return cfg
 
 
 def pvgis_range() -> Tuple[int, int]:

@@ -20,6 +20,8 @@ Groups (one line each; the reason is in each function's docstring):
   wake      dose-response in the tier-B wake energy (where deferral stops paying)
   latency   deferral deadline and on-node queue size vs value and delay
   sites     the four claim cells under five other climates
+  prereg    the grid of PREREGISTRATION.md (autonomy 0.5-100 d x ratio 0.75-3),
+            used for the held-out Snapshot Serengeti test (--corpus serengeti)
 
 Every run also scores its battery trace under k_sigma in KSIG and k_T in KT
 (no extra simulation: see sunsched/env/battery.py:aging_variants).
@@ -75,6 +77,12 @@ WAKE_RATIOS = (1.0, 2.0)
 DEADLINES_H = (3.0, 6.0, 12.0, 24.0, 48.0, 96.0)
 QUEUE_FRAMES = (25, 100, 400, 20000)
 LATENCY_CELLS = ((0.5, 2.0), (1.0, 1.0), (2.0, 1.0))
+# PREREGISTRATION.md, "Experimental grid" (fixed 2026-09-28, before any
+# Serengeti data was downloaded).
+PREREG_AUTONOMY = (0.5, 1.0, 2.0, 3.0, 5.0, 10.0, 30.0, 100.0)
+PREREG_RATIOS = (0.75, 1.0, 1.5, 2.0, 3.0)
+PREREG_POLICIES = ["always_now", "ee_now", "ceiling_now", "lazy_defer", "defer_ceiling",
+                   "batch_anytime", "ceiling_conformal"]
 
 
 def cell_jobs(cfg, policies, cells, overrides=None, tags=None, site=None):
@@ -151,14 +159,22 @@ def sites(cfg):
     real deployments; labelled as such in the paper)."""
     jobs = []
     for site in SITES:
-        if site == cfg.experiment.main_site or site == "serengeti":
+        if site in (cfg.experiment.main_site, "serengeti", "cct_region"):
             continue
         jobs += cell_jobs(cfg, CORE, CLAIM_CELLS, site=site,
                           tags=dict(group="sites", param="site", level=site))
     return jobs
 
 
-GROUPS = dict(coverage=coverage, grid=grid, sens=sens, wake=wake, latency=latency, sites=sites)
+def prereg(cfg):
+    """The pre-registered grid. H2 and H3 of PREREGISTRATION.md are decided
+    on its cells; the extra policies are reported as exploratory."""
+    cells = [(a, r) for a in PREREG_AUTONOMY for r in PREREG_RATIOS]
+    return cell_jobs(cfg, PREREG_POLICIES, cells, tags=dict(group="prereg"))
+
+
+GROUPS = dict(coverage=coverage, grid=grid, sens=sens, wake=wake, latency=latency, sites=sites,
+              prereg=prereg)
 
 
 def git_commit() -> str:
@@ -171,7 +187,7 @@ def git_commit() -> str:
 
 def main():
     ap = base_parser(__doc__)
-    ap.add_argument("--only", nargs="*", default=list(GROUPS))
+    ap.add_argument("--only", nargs="*", default=["coverage", "grid", "sens", "wake", "latency", "sites"])
     ap.add_argument("--dry-run", action="store_true", help="print job counts and exit")
     args = ap.parse_args()
     cfg = load_cfg(args)
@@ -191,8 +207,9 @@ def main():
     print(f"  {'total':<9} {total:>6}")
     if args.dry_run:
         return
-    with open(f"{out}/manifest.json", "w", encoding="utf-8") as f:
+    with open(f"{out}/manifest_{'_'.join(args.only)}.json", "w", encoding="utf-8") as f:
         json.dump(dict(started=datetime.now().isoformat(timespec="seconds"), git=git_commit(),
+                       corpus=cfg.data.corpus, backbone=cfg.vision.backbone,
                        groups={k: len(v) for k, v in plan.items()},
                        config=config_to_dict(cfg)), f, indent=2, default=str)
     for name, jobs in plan.items():

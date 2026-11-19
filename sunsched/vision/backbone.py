@@ -22,12 +22,21 @@ def input_size(height: int, aspect: float) -> Tuple[int, int]:
     return height, max(width, 32)
 
 
-def load_trunk(name: str = "mobilenet_v3_large") -> nn.Sequential:
-    if name != "mobilenet_v3_large":
+def load_trunk(name: str = "mobilenet_v3_large", pretrained: bool = True) -> nn.Sequential:
+    if name == "mobilenet_v3_large":
+        from torchvision.models import mobilenet_v3_large, MobileNet_V3_Large_Weights
+        model = mobilenet_v3_large(weights=MobileNet_V3_Large_Weights.IMAGENET1K_V2 if pretrained else None)
+        trunk = model.features.eval()
+    elif name == "resnet50":
+        # Second classifier (paper revision). The trunk is laid out as one
+        # Sequential so taps index it like MobileNet's features:
+        # 0 conv1, 1 bn1, 2 relu, 3 maxpool, 4 layer1, 5 layer2, 6 layer3, 7 layer4.
+        from torchvision.models import resnet50, ResNet50_Weights
+        m = resnet50(weights=ResNet50_Weights.IMAGENET1K_V2 if pretrained else None)
+        trunk = nn.Sequential(m.conv1, m.bn1, m.relu, m.maxpool,
+                              m.layer1, m.layer2, m.layer3, m.layer4).eval()
+    else:
         raise ValueError(f"unsupported backbone {name!r}")
-    from torchvision.models import mobilenet_v3_large, MobileNet_V3_Large_Weights
-    model = mobilenet_v3_large(weights=MobileNet_V3_Large_Weights.IMAGENET1K_V2)
-    trunk = model.features.eval()
     for p in trunk.parameters():
         p.requires_grad_(False)
     return trunk

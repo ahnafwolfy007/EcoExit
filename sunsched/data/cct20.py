@@ -20,7 +20,8 @@ import tarfile
 import numpy as np
 
 SPLITS = ("train", "cis_val", "trans_val", "cis_test", "trans_test")
-TIMESTAMP_FORMATS = ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M:%S.%f", "%Y-%m-%dT%H:%M:%S")
+TIMESTAMP_FORMATS = ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M:%S.%f", "%Y-%m-%dT%H:%M:%S",
+                     "%Y:%m:%d %H:%M:%S", "%Y/%m/%d %H:%M:%S")
 
 
 @dataclass

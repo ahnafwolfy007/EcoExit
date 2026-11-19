@@ -19,7 +19,7 @@ import numpy as np
 
 from sunsched.cli import banner, base_parser, load_cfg, write_csv, write_json
 from sunsched.config import SITES, pvgis_range
-from sunsched.data import cct20
+from sunsched.data import source
 from sunsched.env import solar as S
 from sunsched.env.events import build_streams, diel_profile, slot_in_year
 from sunsched.experiment import always_now_demand_j
@@ -55,8 +55,7 @@ def build_solar(cfg) -> dict:
 
 def diel_mismatch(cfg, years):
     """How much of the animal activity happens when there is no sun."""
-    ann = cfg.data.annotations_dir
-    recs = [r for s in cct20.SPLITS for r in cct20.load_split(ann, s) if r.label != cfg.task.empty_class]
+    recs = [r for r in source.all_records(cfg) if r.label != cfg.task.empty_class]
     site = SITES[cfg.experiment.main_site]
     doy = np.array([r.timestamp.timetuple().tm_yday for r in recs])
     clock = np.array([r.timestamp.hour + r.timestamp.minute / 60.0 for r in recs])
@@ -93,7 +92,7 @@ def diel_mismatch(cfg, years):
         pearson_hourly_events_vs_energy=float(np.corrcoef(ev_share, energy_share)[0, 1]),
         note="capture clock times are camera clocks; DST handling is unknown (up to 1 h in summer)",
     )
-    print(f"  {len(recs):,} animal captures across all 20 CCT20 cameras")
+    print(f"  {len(recs):,} animal captures across all {cfg.data.corpus} cameras")
     print(f"  {summary['events_sun_below_horizon'] * 100:5.1f}% arrive with the sun below the horizon "
           f"(0% of the energy)")
     print(f"  {summary['events_sun_above_40deg'] * 100:5.1f}% arrive with the sun above 40 deg, "

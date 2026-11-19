@@ -83,3 +83,19 @@ def test_gain_table():
                                    np.ones(n), edges, 20.0)
     assert table.shape == (4, 2) and (table >= 0).all() and counts.sum() == n
     assert table[0, 0] > table[-1, 0], "unsure triage frames should gain more from refinement"
+
+
+def test_resnet50_trunk_taps_and_macs():
+    """Second classifier of the revision: the taps index the trunk like
+    MobileNet's, and it costs far more MACs at the same input."""
+    from sunsched.config import BACKBONES
+    from sunsched.vision.backbone import TapExtractor, load_trunk, tap_dims
+    from sunsched.vision.cost import trunk_macs_at_taps
+    r = load_trunk("resnet50", pretrained=False)
+    m = load_trunk("mobilenet_v3_large", pretrained=False)
+    taps_r, taps_m = BACKBONES["resnet50"], BACKBONES["mobilenet_v3_large"]
+    dims = tap_dims(TapExtractor(r, taps_r), 160, 224)
+    assert dims == [512 * 6, 1024 * 6, 2048 * 2]
+    mr = trunk_macs_at_taps(r, taps_r, 320, 448)
+    mm = trunk_macs_at_taps(m, taps_m, 320, 448)
+    assert mr[taps_r[-1]] > 10 * mm[taps_m[-1]]
