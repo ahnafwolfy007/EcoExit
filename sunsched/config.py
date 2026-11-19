@@ -110,9 +110,14 @@ class AgingCfg:
     Lithium-Ion Battery Degradation for Cell Life Assessment", IEEE Trans.
     Smart Grid, 2018 (LMO cell).
 
-    ASSUMPTION: these are the values as commonly reproduced from that paper.
-    Verify them against its parameter table before reporting numbers; they are
-    also swept +/-50% in pipeline/05_sweeps.py.
+    Verified on 2026-11-19 against Table I of the paper (DOI
+    10.1109/TSG.2016.2578950, p. 7): all ten values below match. They were
+    fitted to one LMO cell; Table I's DoD model is LMO-specific, and the
+    temperature model is only recommended above 15 C (Sec. III-A). Two
+    differences from the paper: calendar ageing is integrated over the SoC and
+    temperature trace, where the paper evaluates it at their averages (Eq. 4),
+    and the paper's text says T_ref "293K or 25C" while Table I gives 25 C,
+    which is used here. k_sigma and k_T are swept in pipeline/08_revision.py.
 
     Linearised damage f accumulates from calendar ageing,
         df_cal = k_t * S_sigma(soc) * S_T(temp) * dt,
