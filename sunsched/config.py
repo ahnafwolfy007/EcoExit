@@ -135,6 +135,10 @@ class AgingCfg:
     eol_fade: float = 0.20
     deployment_years: float = 10.0
     battery_kgco2e_per_kwh: float = 85.0     # ASSUMPTION, LCA literature range
+    # Paper revision: also score each trace under these k_sigma / k_T values
+    # (env/battery.py:aging_variants). Empty = off, as in the first runs.
+    variant_k_sigmas: Tuple[float, ...] = ()
+    variant_k_Ts: Tuple[float, ...] = ()
 
 
 @dataclass
@@ -173,6 +177,9 @@ class ControlCfg:
     base_price: float = 0.002           # value per joule of energy above the reserve
     warmup_target_soc: float = 0.5      # reserve used before the forecaster has enough history
     batch_interval_min: int = 60        # how often to consider a refinement batch
+    # Paper revision: score alternative reserve rules at these risk levels
+    # alongside the one in use (env/forecast.py). Empty = off.
+    shadow_alphas: Tuple[float, ...] = ()
 
 
 @dataclass

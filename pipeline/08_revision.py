@@ -1,0 +1,207 @@
+#!/usr/bin/env python
+"""Experiments added in response to the paper review (run after stages 1-3).
+
+    python pipeline/08_revision.py --out ./outputs              # every group
+    python pipeline/08_revision.py --out ./outputs --only grid sens
+    python pipeline/08_revision.py --out ./outputs --dry-run    # count jobs only
+
+Uses the artifacts of the earlier full run (outputs/artifacts), so nothing is
+downloaded and stages 1-3 are not repeated. Every table goes to
+<out>/results/tables/revision/ and no earlier table is overwritten.
+
+Groups (one line each; the reason is in each function's docstring):
+  coverage  reserve rules compared on the same nights: ACI, split conformal,
+            empirical quantile, point forecast, at alpha in ALPHAS
+  grid      the full autonomy x ratio grid with the paper's policies plus the
+            new pre-specified controls (defer_ceiling, batch_anytime,
+            ceiling_conformal, defer_ceiling_conformal)
+  sens      every assumed hardware constant at both ends of its range, at the
+            four cells that carry the paper's claims
+  wake      dose-response in the tier-B wake energy (where deferral stops paying)
+  latency   deferral deadline and on-node queue size vs value and delay
+  sites     the four claim cells under five other climates
+
+Every run also scores its battery trace under k_sigma in KSIG and k_T in KT
+(no extra simulation: see sunsched/env/battery.py:aging_variants).
+"""
+import json
+import os
+import subprocess
+import sys
+from datetime import datetime
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from sunsched.cli import banner, base_parser, load_cfg, write_csv
+from sunsched.config import SITES
+from sunsched.experiment import config_to_dict, make_jobs, run_jobs
+
+# The paper's grid (stage 5 'autonomy' sweep).
+AUTONOMY = (0.5, 1.0, 2.0, 3.0, 5.0, 10.0, 30.0, 100.0, 175.0)
+RATIOS = (0.5, 1.0, 2.0)
+# The cells the paper's two claims rest on: deferral at small storage,
+# charge ceiling at large storage.
+CLAIM_CELLS = ((0.5, 2.0), (1.0, 1.0), (30.0, 2.0), (100.0, 2.0))
+
+PAPER_POLICIES = ["always_now", "ee_now", "ceiling_now", "lazy_defer"]
+NEW_POLICIES = ["defer_ceiling", "batch_anytime", "ceiling_conformal", "defer_ceiling_conformal"]
+CORE = ["always_now", "lazy_defer", "ceiling_now", "defer_ceiling"]
+
+KSIG = (0.0, 0.26, 0.52, 0.78, 1.04, 1.30, 1.56, 2.08)
+KT = (0.0, 0.035, 0.104)
+ALPHAS = (0.01, 0.02, 0.05, 0.1, 0.2)
+
+# (field, low, high). Ranges as in stage 5, plus three constants stage 5 did
+# not sweep. Battery and panel are re-sized from the overridden energy model,
+# so each cell keeps its autonomy and harvest ratio: what changes is the cost
+# structure inside the regime, not the regime.
+SENSITIVITY = [
+    ("node.tier_b_wake_j", 3.0, 30.0),
+    ("node.tier_b_active_w", 1.5, 6.0),
+    ("node.e_capture_day_j", 0.2, 0.8),
+    ("node.e_capture_night_j", 0.4, 3.0),
+    ("node.p_sleep_w", 0.0005, 0.01),
+    ("node.tier_a_pj_per_mac", 5.0, 100.0),
+    ("solar.enclosure_gain_c", 0.0, 30.0),
+    ("battery.soc_floor", 0.02, 0.15),
+    ("battery.self_discharge_per_month", 0.01, 0.05),
+    ("battery.eta_charge", 0.90, 0.99),
+    ("control.deadline_h", 12.0, 96.0),
+    ("control.min_ceiling", 0.15, 0.5),
+]
+WAKE_J = (0.5, 1.0, 2.0, 3.0, 6.0, 12.0, 20.0, 30.0, 50.0)
+WAKE_AUTONOMY = (0.5, 1.0, 2.0, 5.0, 30.0)
+WAKE_RATIOS = (1.0, 2.0)
+DEADLINES_H = (3.0, 6.0, 12.0, 24.0, 48.0, 96.0)
+QUEUE_FRAMES = (25, 100, 400, 20000)
+LATENCY_CELLS = ((0.5, 2.0), (1.0, 1.0), (2.0, 1.0))
+
+
+def cell_jobs(cfg, policies, cells, overrides=None, tags=None, site=None):
+    jobs = []
+    for a, r in cells:
+        t = dict(autonomy=a, **(tags or {}))
+        jobs += make_jobs(cfg, policies, [r], site=site, overrides=overrides,
+                          autonomy_days=a, tags=t)
+    return jobs
+
+
+def coverage(cfg):
+    """The reviewer asked whether 94.4% coverage against a 95% target is a
+    calibration failure, and how the conformal bound compares with simpler
+    reserve rules. The required reserve depends only on the capture stream and
+    the weather, not on the battery or the policy, so one policy that queries
+    the bound (sunsched) at the paper's 10 Wh sizing is enough: 9 cameras x 5
+    years x 3 ratios = 135 distinct traces."""
+    return make_jobs(cfg, ["sunsched"], RATIOS, tags=dict(group="coverage"))
+
+
+def grid(cfg):
+    """The reviewer's first request was a controller that works in both
+    regimes. defer_ceiling is the simplest such controller (the two winning
+    rules combined, defaults untouched); batch_anytime batches wakes without
+    waiting for the sun, which separates wake amortisation from time-shifting;
+    the *_conformal variants put the conformal bound in charge of the ceiling.
+    The paper's own policies are re-run so every comparison is paired and the
+    new ageing metrics exist for them."""
+    cells = [(a, r) for a in AUTONOMY for r in RATIOS]
+    return cell_jobs(cfg, PAPER_POLICIES + NEW_POLICIES, cells, tags=dict(group="grid"))
+
+
+def sens(cfg):
+    """The reviewer doubted the energy model. Each constant is pushed to both
+    ends of its range at each claim cell; a claim that flips is reported."""
+    jobs = []
+    for field, lo, hi in SENSITIVITY:
+        for level, value in (("low", lo), ("high", hi)):
+            jobs += cell_jobs(cfg, CORE, CLAIM_CELLS, overrides={field: value},
+                              tags=dict(group="sens", param=field, level=level, value=value))
+    return jobs
+
+
+def wake(cfg):
+    """Stage 5 showed the deferral result can flip with the wake energy. This
+    traces where: the break-even wake energy per autonomy level."""
+    cells = [(a, r) for a in WAKE_AUTONOMY for r in WAKE_RATIOS]
+    jobs = []
+    for w in WAKE_J:
+        jobs += cell_jobs(cfg, ["always_now", "lazy_defer", "batch_anytime"], cells,
+                          overrides={"node.tier_b_wake_j": w},
+                          tags=dict(group="wake", param="node.tier_b_wake_j", value=w))
+    return jobs
+
+
+def latency(cfg):
+    """Deferral trades delay for value. The reviewer asked how the result
+    depends on the deadline and on flash capacity for the queue."""
+    jobs = []
+    for d in DEADLINES_H:
+        jobs += cell_jobs(cfg, ["lazy_defer", "defer_ceiling"], LATENCY_CELLS,
+                          overrides={"control.deadline_h": d},
+                          tags=dict(group="latency", param="control.deadline_h", value=d))
+    for q in QUEUE_FRAMES:
+        jobs += cell_jobs(cfg, ["lazy_defer", "defer_ceiling"], LATENCY_CELLS,
+                          overrides={"node.queue_capacity": q},
+                          tags=dict(group="latency", param="node.queue_capacity", value=q))
+    return jobs
+
+
+def sites(cfg):
+    """Same real animal activity under other suns (climate transplants, not
+    real deployments; labelled as such in the paper)."""
+    jobs = []
+    for site in SITES:
+        if site == cfg.experiment.main_site or site == "serengeti":
+            continue
+        jobs += cell_jobs(cfg, CORE, CLAIM_CELLS, site=site,
+                          tags=dict(group="sites", param="site", level=site))
+    return jobs
+
+
+GROUPS = dict(coverage=coverage, grid=grid, sens=sens, wake=wake, latency=latency, sites=sites)
+
+
+def git_commit() -> str:
+    try:
+        return subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True,
+                              timeout=10).stdout.strip()
+    except Exception:
+        return "unknown"
+
+
+def main():
+    ap = base_parser(__doc__)
+    ap.add_argument("--only", nargs="*", default=list(GROUPS))
+    ap.add_argument("--dry-run", action="store_true", help="print job counts and exit")
+    args = ap.parse_args()
+    cfg = load_cfg(args)
+    if not os.path.exists(f"{cfg.artifacts_dir}/outcomes.npz"):
+        sys.exit(f"{cfg.artifacts_dir}/outcomes.npz not found. Point --out at the folder of the "
+                 f"earlier full run (the one holding artifacts/), or run stages 1-3 first.")
+    cfg.aging.variant_k_sigmas = KSIG
+    cfg.aging.variant_k_Ts = KT
+    cfg.control.shadow_alphas = ALPHAS
+
+    out = f"{cfg.results_dir}/tables/revision"
+    os.makedirs(out, exist_ok=True)
+    plan = {name: GROUPS[name](cfg) for name in args.only}
+    total = sum(len(j) for j in plan.values())
+    for name, jobs in plan.items():
+        print(f"  {name:<9} {len(jobs):>6} simulated deployments")
+    print(f"  {'total':<9} {total:>6}")
+    if args.dry_run:
+        return
+    with open(f"{out}/manifest.json", "w", encoding="utf-8") as f:
+        json.dump(dict(started=datetime.now().isoformat(timespec="seconds"), git=git_commit(),
+                       groups={k: len(v) for k, v in plan.items()},
+                       config=config_to_dict(cfg)), f, indent=2, default=str)
+    for name, jobs in plan.items():
+        banner(f"revision: {name} ({len(jobs)} runs)")
+        rows = run_jobs(jobs, cfg.experiment.n_workers, name)
+        write_csv(f"{out}/{name}_runs.csv", rows)
+        bad = sum("error" in r for r in rows)
+        print(f"  wrote {out}/{name}_runs.csv ({len(rows)} rows, {bad} errors)")
+
+
+if __name__ == "__main__":
+    main()

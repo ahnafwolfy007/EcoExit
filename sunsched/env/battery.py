@@ -156,3 +156,62 @@ def aging_summary(soc: np.ndarray, temp_c: np.ndarray, dt_s: float, days: float,
         replacements_per_deployment=replacements,
         battery_kgco2e_per_deployment=replacements * cfg.battery_kgco2e_per_kwh * capacity_wh / 1000.0,
     )
+
+
+# -- robustness of the lifetime result to the ageing model ---------------------
+# Added for the paper revision. The simulation never reads the ageing model:
+# it produces a state-of-charge and temperature trace, and ageing is computed
+# from that trace afterwards. So the same trace can be scored under many
+# ageing parameter sets at no extra simulation cost, and every set sees the
+# identical policy behaviour. Rainflow counting is done once per trace.
+
+def _cycle_table(soc: np.ndarray, temp_c: np.ndarray, hysteresis: float = 1e-3):
+    """(count, depth, mean soc, mean temperature) of every rainflow cycle."""
+    soc = np.asarray(soc, dtype=np.float64)
+    temp = np.asarray(temp_c, dtype=np.float64)
+    cs = np.concatenate([[0.0], np.cumsum(soc)])
+    ct = np.concatenate([[0.0], np.cumsum(temp)])
+    rows = []
+    for count, a, b in rainflow(soc, hysteresis):
+        lo, hi = min(a, b), max(a, b)
+        depth = abs(soc[b] - soc[a])
+        if depth <= 0:
+            continue
+        m = hi - lo + 1
+        rows.append((count, depth, (cs[hi + 1] - cs[lo]) / m, (ct[hi + 1] - ct[lo]) / m))
+    if not rows:
+        return np.zeros((0, 4))
+    return np.asarray(rows, dtype=np.float64)
+
+
+def aging_variants(soc: np.ndarray, temp_c: np.ndarray, dt_s: float, days: float, cfg,
+                   k_sigmas=(), k_Ts=()) -> Dict[str, float]:
+    """Years to end of life under alternative stress parameters, same trace.
+
+    life_ksig<v>: the model of AgingCfg with k_sigma replaced by v (k_sigma = 0
+    removes the state-of-charge dependence of ageing altogether).
+    life_kT<v>:   the same with k_T replaced by v.
+    With the default parameters this reproduces aging_summary exactly
+    (tested in sunsched/tests/test_revision.py).
+    """
+    if not k_sigmas and not k_Ts:
+        return {}
+    import dataclasses
+    years = max(days / 365.0, 1e-9)
+    cyc = _cycle_table(soc, temp_c)
+    f_eol = damage_at_end_of_life(cfg)
+    out = {}
+
+    def life(c) -> float:
+        f_cal = calendar_damage(soc, temp_c, dt_s, c) / years
+        f_cyc = 0.0
+        if len(cyc):
+            f_cyc = float(np.sum(cyc[:, 0] * stress_depth(cyc[:, 1], c) * stress_soc(cyc[:, 2], c)
+                                 * stress_temp(cyc[:, 3], c))) / years
+        return f_eol / max(f_cal + f_cyc, 1e-15)
+
+    for v in k_sigmas:
+        out[f"life_ksig{float(v):g}"] = life(dataclasses.replace(cfg, k_sigma=float(v)))
+    for v in k_Ts:
+        out[f"life_kT{float(v):g}"] = life(dataclasses.replace(cfg, k_T=float(v)))
+    return out

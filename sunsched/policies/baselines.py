@@ -11,6 +11,27 @@ import numpy as np
 from sunsched.policies.base import Obs, Policy, QItem
 
 
+def reserve_ceiling(ctx, obs: Obs, bound: str, margin: float, min_ceiling: float) -> float:
+    """Charge ceiling for today: tonight's reserve need, plus a fixed margin.
+
+    bound="point" uses the point forecast (the published rule); "conformal"
+    uses the conformal upper bound at the configured risk level instead.
+    During forecaster warm-up the battery is allowed to fill.
+    """
+    fc = ctx.forecaster
+    if bound == "conformal":
+        day = obs.t // ctx.slots_per_day
+        sunset = ctx.sunset[day] if 0 <= day < len(ctx.sunset) else -1
+        if sunset < 0:
+            sunset = obs.t + ctx.slots_per_day // 2
+        need = fc.predict(int(sunset), obs.t)
+    else:
+        need = fc.point(obs.t)
+    if need is None:
+        return 1.0
+    return float(np.clip((obs.floor_j + need) / obs.capacity_j + margin, min_ceiling, 1.0))
+
+
 class AlwaysNow(Policy):
     """Run the full model on every capture, immediately; keep the battery full.
     The accuracy-first default of an unmanaged node."""
@@ -59,15 +80,21 @@ class LazyDeferral(Policy):
     """
     name = "lazy_defer"
 
-    def __init__(self, theta: float, soc_on: float, soc_keep: float, interval_slots: int):
+    def __init__(self, theta: float, soc_on: float, soc_keep: float, interval_slots: int,
+                 daylight_only: bool = True, name: str = None):
         self.theta, self.soc_on, self.soc_keep = theta, soc_on, soc_keep
         self.interval = max(int(interval_slots), 1)
+        self.daylight_only = daylight_only
+        if name:
+            self.name = name
 
     def post_triage(self, obs, frame, pred, conf, gain):
         return "defer" if conf < self.theta else "final"
 
     def wants_batch(self, obs):
-        return (not obs.night) and obs.soc >= self.soc_on and (
+        if self.daylight_only and obs.night:
+            return False
+        return obs.soc >= self.soc_on and (
             obs.t % self.interval == 0 or obs.curtail_hint_j > 0 or obs.b_will_wake)
 
     def refine_batch(self, obs, items):
@@ -90,9 +117,13 @@ class ChargeCeilingEarlyExit(EnergyAwareEarlyExit):
     """
     name = "ceiling_now"
 
-    def __init__(self, theta_hi, soc_hi, soc_lo, margin: float, min_ceiling: float):
+    def __init__(self, theta_hi, soc_hi, soc_lo, margin: float, min_ceiling: float,
+                 bound: str = "point", name: str = None):
         super().__init__(theta_hi, soc_hi, soc_lo)
         self.margin, self.min_ceiling = margin, min_ceiling
+        self.bound = bound
+        if name:
+            self.name = name
         self._ceiling = 1.0
 
     def reset(self, ctx):
@@ -100,12 +131,7 @@ class ChargeCeilingEarlyExit(EnergyAwareEarlyExit):
         self._ceiling = 1.0
 
     def on_sunrise(self, obs):
-        point = self.ctx.forecaster.point(obs.t)
-        if point is None:
-            self._ceiling = 1.0
-        else:
-            self._ceiling = float(np.clip((obs.floor_j + point) / obs.capacity_j + self.margin,
-                                          self.min_ceiling, 1.0))
+        self._ceiling = reserve_ceiling(self.ctx, obs, self.bound, self.margin, self.min_ceiling)
 
     def ceiling(self, obs):
         return self._ceiling
@@ -118,3 +144,48 @@ class ChargeCeilingEarlyExit(EnergyAwareEarlyExit):
 
     def now_op(self, obs):
         return "full" if obs.soc / max(self._ceiling, 1e-9) >= self.soc_hi else "lite"
+
+
+class DeferCeiling(LazyDeferral):
+    """Lazy deferral to daylight combined with a charge ceiling (paper revision).
+
+    The direct "why not both" controller: uncertain frames are deferred and
+    refined in daylight batches exactly as in LazyDeferral, and the battery is
+    capped as in ChargeCeilingEarlyExit. Every parameter is the default of the
+    two baselines it combines; nothing was tuned for it. Battery levels are
+    judged against the ceiling, as in ChargeCeilingEarlyExit, so a node capped
+    at 40% still refines.
+    """
+    name = "defer_ceiling"
+
+    def __init__(self, theta, soc_on, soc_keep, interval_slots, margin, min_ceiling,
+                 bound: str = "point", name: str = None):
+        super().__init__(theta, soc_on, soc_keep, interval_slots, daylight_only=True, name=name)
+        self.margin, self.min_ceiling, self.bound = margin, min_ceiling, bound
+        self._ceiling = 1.0
+
+    def reset(self, ctx):
+        super().reset(ctx)
+        self._ceiling = 1.0
+
+    def on_sunrise(self, obs):
+        self._ceiling = reserve_ceiling(self.ctx, obs, self.bound, self.margin, self.min_ceiling)
+
+    def ceiling(self, obs):
+        return self._ceiling
+
+    def wants_batch(self, obs):
+        if obs.night:
+            return False
+        rel = obs.soc / max(self._ceiling, 1e-9)
+        return rel >= self.soc_on and (
+            obs.t % self.interval == 0 or obs.curtail_hint_j > 0 or obs.b_will_wake)
+
+    def refine_batch(self, obs, items):
+        e = self.ctx.energy
+        eta_d = self.ctx.cfg.battery.eta_discharge
+        usable = (obs.energy_j - self.soc_keep * self._ceiling * obs.capacity_j) * eta_d
+        if not obs.b_will_wake:
+            usable -= e.wake_j
+        n = int(max(0.0, usable) // e.refine_j[self.refine_op])
+        return sorted(items, key=lambda it: it.t)[:n]

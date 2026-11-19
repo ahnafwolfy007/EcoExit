@@ -20,7 +20,7 @@ from sunsched.env.solar import (battery_temperature, dawn_dusk, harvest_j,
                                 irradiation_j_per_m2, load_year)
 from sunsched.eval.metrics import summarize
 from sunsched.policies.base import RunContext
-from sunsched.policies.baselines import (AlwaysNow, ChargeCeilingEarlyExit,
+from sunsched.policies.baselines import (AlwaysNow, ChargeCeilingEarlyExit, DeferCeiling,
                                          EnergyAwareEarlyExit, LazyDeferral, TriageOnly)
 from sunsched.policies.ours import SunSched
 from sunsched.sim.node import build_node_energy
@@ -32,6 +32,9 @@ OURS = ["sunsched"]
 ABLATIONS = ["sunsched_no_defer", "sunsched_no_ceiling", "sunsched_no_conformal", "sunsched_lite"]
 # The per-frame and deferral controllers the kill test compares against.
 STRONG_BASELINES = ["ee_now", "ceiling_now", "lazy_defer"]
+# Paper revision: pre-specified controls, all at the defaults of the baselines
+# they are built from (see policies/baselines.py).
+REVISION_POLICIES = ["defer_ceiling", "batch_anytime", "ceiling_conformal", "defer_ceiling_conformal"]
 
 
 # -- config (de)serialisation, so worker processes rebuild the exact config ----
@@ -78,6 +81,16 @@ def make_policy(name: str, cfg: C.Config):
     if name == "ceiling_now":
         return ChargeCeilingEarlyExit(b.ee_theta_hi, b.ee_soc_hi, b.ee_soc_lo,
                                       b.ceiling_margin, c.min_ceiling)
+    if name == "batch_anytime":
+        return LazyDeferral(b.lazy_theta, b.lazy_soc_on, b.lazy_soc_keep, interval,
+                            daylight_only=False, name=name)
+    if name == "ceiling_conformal":
+        return ChargeCeilingEarlyExit(b.ee_theta_hi, b.ee_soc_hi, b.ee_soc_lo,
+                                      b.ceiling_margin, c.min_ceiling, bound="conformal", name=name)
+    if name in ("defer_ceiling", "defer_ceiling_conformal"):
+        return DeferCeiling(b.lazy_theta, b.lazy_soc_on, b.lazy_soc_keep, interval,
+                            b.ceiling_margin, c.min_ceiling,
+                            bound="conformal" if name.endswith("conformal") else "point", name=name)
     if name == "sunsched":
         return SunSched(c)
     if name == "sunsched_no_defer":
@@ -180,7 +193,8 @@ def run_job(job: dict) -> dict:
         alpha=cfg.control.alpha, gamma=cfg.control.aci_gamma,
         window_days=cfg.control.reserve_window_days,
         eta_charge=cfg.battery.eta_charge, eta_discharge=cfg.battery.eta_discharge,
-        conformal=getattr(policy, "uses_conformal", True))
+        conformal=getattr(policy, "uses_conformal", True),
+        shadow_alphas=tuple(getattr(cfg.control, "shadow_alphas", ()) or ()))
     ctx = RunContext(cfg=cfg, energy=energy, forecaster=forecaster, slots_per_day=spd,
                      slot_seconds=cfg.slot_seconds,
                      deadline_slots=int(round(cfg.control.deadline_h * 3600 / cfg.slot_seconds)),

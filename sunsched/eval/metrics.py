@@ -9,7 +9,7 @@ from typing import Dict
 
 import numpy as np
 
-from sunsched.env.battery import aging_summary
+from sunsched.env.battery import aging_summary, aging_variants
 from sunsched.sim.simulator import (DROPPED, REFINED_LATER, REFINED_NOW, TRIAGE,
                                     UNCLASSIFIED, SimResult)
 
@@ -80,6 +80,9 @@ def classification_metrics(res: SimResult, outcomes, slot_minutes: int) -> Dict[
 def energy_battery_metrics(res: SimResult, cfg, days: float) -> Dict[str, float]:
     soc = res.soc
     ageing = aging_summary(soc, res.temp_c, cfg.slot_seconds, days, cfg.aging, cfg.battery.capacity_wh)
+    variants = aging_variants(soc, res.temp_c, cfg.slot_seconds, days, cfg.aging,
+                              tuple(getattr(cfg.aging, "variant_k_sigmas", ()) or ()),
+                              tuple(getattr(cfg.aging, "variant_k_Ts", ()) or ()))
     return dict(
         soc_mean=float(soc.mean()),
         soc_p95=float(np.percentile(soc, 95)),
@@ -99,6 +102,8 @@ def energy_battery_metrics(res: SimResult, cfg, days: float) -> Dict[str, float]
         deferred=int(res.deferred),
         reserve_coverage=(float("nan") if res.reserve_coverage is None else res.reserve_coverage),
         **ageing,
+        **variants,
+        **(getattr(res, "reserve_shadow", None) or {}),
     )
 
 

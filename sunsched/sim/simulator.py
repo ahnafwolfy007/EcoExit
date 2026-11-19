@@ -11,7 +11,7 @@ exception, and if even that cannot be paid the node is dead for the slot and
 misses whatever arrives.
 """
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
 import numpy as np
@@ -40,6 +40,7 @@ class SimResult:
     dead_slots: int
     deferred: int
     reserve_coverage: Optional[float]
+    reserve_shadow: Dict[str, float] = field(default_factory=dict)
 
 
 def simulate(ctx: RunContext, policy: Policy, frames: np.ndarray, frame_slots: np.ndarray,
@@ -225,4 +226,6 @@ def simulate(ctx: RunContext, policy: Policy, frames: np.ndarray, frame_slots: n
                      soc=soc_trace, temp_c=np.asarray(temp_c, dtype=np.float64),
                      ceiling=ceil_trace, harvested_j=harvested, consumed_j=consumed,
                      curtailed_j=curtailed, b_wakes=b_wakes, dead_slots=dead,
-                     deferred=deferred, reserve_coverage=ctx.forecaster.coverage())
+                     deferred=deferred, reserve_coverage=ctx.forecaster.coverage(),
+                     reserve_shadow=(ctx.forecaster.shadow_summary()
+                                     if hasattr(ctx.forecaster, "shadow_summary") else {}))
