@@ -164,14 +164,30 @@ def select(records: Sequence[Record], splits: Dict[str, set], cfg) -> Dict[str, 
     for r in val_pool:
         per_cam.setdefault(r.location, []).append(r)
     ranking = sorted(per_cam, key=lambda c: (-sum(r.label != "empty" for r in per_cam[c]), c))
-    eval_cams, total = [], 0
-    for c in ranking:
-        if total + len(per_cam[c]) <= d.serengeti_eval_budget:
-            eval_cams.append(c)
-            total += len(per_cam[c])
-    if len(eval_cams) < d.serengeti_min_eval_cameras:
-        raise ValueError(f"only {len(eval_cams)} val cameras fit serengeti_eval_budget="
-                         f"{d.serengeti_eval_budget}; raise the budget")
+
+    def fill(budget):
+        cams, total = [], 0
+        for c in ranking:
+            if total + len(per_cam[c]) <= budget:
+                cams.append(c)
+                total += len(per_cam[c])
+        return cams
+
+    # Deviation from PREREGISTRATION.md, recorded in PREREG_DEVIATIONS.md: on
+    # season S10 the registered budget admits fewer cameras than the registered
+    # minimum. The budget is then raised in fixed steps to the smallest value
+    # that admits the minimum, with the ranking unchanged. Decided after reading
+    # only the metadata, before any image was downloaded or any result existed.
+    budget = d.serengeti_eval_budget
+    eval_cams = fill(budget)
+    while len(eval_cams) < d.serengeti_min_eval_cameras:
+        budget += 5000
+        if budget > 500000:
+            raise ValueError("no budget up to 500,000 images admits the minimum number of cameras")
+        eval_cams = fill(budget)
+    if budget != d.serengeti_eval_budget:
+        print(f"  [deviation] serengeti_eval_budget raised {d.serengeti_eval_budget:,} -> {budget:,} "
+              f"so that {len(eval_cams)} >= {d.serengeti_min_eval_cameras} eval cameras fit")
     calib_cams = [c for c in ranking if c not in eval_cams][:d.serengeti_calib_cameras]
 
     def pick(cams):
