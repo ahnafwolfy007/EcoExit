@@ -110,3 +110,34 @@ def test_ceiling_now_unchanged_by_refactor():
     cfg, ctx, res, _ = run_policy("ceiling_now", sun=3.0)
     assert res.ceiling.min() >= cfg.control.min_ceiling - 1e-12
     assert res.ceiling.max() <= 1.0
+
+
+V3 = ["sunsched3", "sunsched3_no_coalesce", "sunsched3_no_pv", "sunsched3_no_hold"]
+
+
+def test_v3_runs_finalises_and_respects_deadline():
+    for name in V3:
+        for sun in (0.5, 1.0, 3.0):
+            cfg, ctx, res, _ = run_policy(name, sun=sun)
+            assert np.all(res.final_slot >= 0), name
+            assert np.all((res.soc >= -1e-9) & (res.soc <= 1 + 1e-9)), name
+            later = res.route == REFINED_LATER
+            lat = res.final_slot - res.capture_slot
+            assert np.all(lat[later] <= ctx.deadline_slots), name
+            assert not np.any(res.route == REFINED_NOW), name
+
+
+def test_v3_coalesces_wakes():
+    """With coalescing, refinements share wakes: fewer wakes per refined frame."""
+    _, _, a, _ = run_policy("sunsched3", sun=3.0)
+    _, _, b, _ = run_policy("sunsched3_no_coalesce", sun=3.0)
+    ra = a.b_wakes / max(np.sum(a.route == REFINED_LATER), 1)
+    rb = b.b_wakes / max(np.sum(b.route == REFINED_LATER), 1)
+    assert ra <= rb + 1e-9, (ra, rb)
+
+
+def test_v3_hold_engages_only_with_surplus():
+    _, _, rich, _ = run_policy("sunsched3", sun=3.0)
+    _, _, poor, _ = run_policy("sunsched3", sun=0.3)
+    assert rich.ceiling.min() < 1.0, "hold never engaged with plenty of sun"
+    assert poor.ceiling.mean() >= rich.ceiling.mean()

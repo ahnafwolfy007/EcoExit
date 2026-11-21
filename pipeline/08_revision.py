@@ -173,8 +173,28 @@ def prereg(cfg):
     return cell_jobs(cfg, PREREG_POLICIES, cells, tags=dict(group="prereg"))
 
 
+V3 = ["sunsched3", "sunsched3_no_coalesce", "sunsched3_no_pv", "sunsched3_no_hold"]
+
+
+def v3grid(cfg):
+    """Development run of SunSched v3 and its ablations on the paper grid. The
+    baselines are deterministic and already in grid_runs.csv, so only v3 runs."""
+    cells = [(a, r) for a in AUTONOMY for r in RATIOS]
+    return cell_jobs(cfg, V3, cells, tags=dict(group="v3grid"))
+
+
+def v3wake(cfg):
+    """v3 under the wake-energy sweep (baselines already in wake_runs.csv)."""
+    cells = [(a, r) for a in WAKE_AUTONOMY for r in WAKE_RATIOS]
+    jobs = []
+    for w in WAKE_J:
+        jobs += cell_jobs(cfg, ["sunsched3"], cells, overrides={"node.tier_b_wake_j": w},
+                          tags=dict(group="v3wake", param="node.tier_b_wake_j", value=w))
+    return jobs
+
+
 GROUPS = dict(coverage=coverage, grid=grid, sens=sens, wake=wake, latency=latency, sites=sites,
-              prereg=prereg)
+              prereg=prereg, v3grid=v3grid, v3wake=v3wake)
 
 
 def git_commit() -> str:

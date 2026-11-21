@@ -23,6 +23,7 @@ from sunsched.policies.base import RunContext
 from sunsched.policies.baselines import (AlwaysNow, ChargeCeilingEarlyExit, DeferCeiling,
                                          EnergyAwareEarlyExit, LazyDeferral, TriageOnly)
 from sunsched.policies.ours import SunSched
+from sunsched.policies.v3 import SunSchedV3
 from sunsched.sim.node import build_node_energy
 from sunsched.sim.outcomes import load_outcomes
 from sunsched.sim.simulator import simulate
@@ -35,6 +36,8 @@ STRONG_BASELINES = ["ee_now", "ceiling_now", "lazy_defer"]
 # Paper revision: pre-specified controls, all at the defaults of the baselines
 # they are built from (see policies/baselines.py).
 REVISION_POLICIES = ["defer_ceiling", "batch_anytime", "ceiling_conformal", "defer_ceiling_conformal"]
+# SunSched v3 and its single-mechanism ablations (policies/v3.py).
+V3_POLICIES = ["sunsched3", "sunsched3_no_coalesce", "sunsched3_no_pv", "sunsched3_no_hold"]
 
 
 # -- config (de)serialisation, so worker processes rebuild the exact config ----
@@ -91,6 +94,14 @@ def make_policy(name: str, cfg: C.Config):
         return DeferCeiling(b.lazy_theta, b.lazy_soc_on, b.lazy_soc_keep, interval,
                             b.ceiling_margin, c.min_ceiling,
                             bound="conformal" if name.endswith("conformal") else "point", name=name)
+    if name == "sunsched3":
+        return SunSchedV3(c, b)
+    if name == "sunsched3_no_coalesce":
+        return SunSchedV3(c, b, coalesce=False, name=name)
+    if name == "sunsched3_no_pv":
+        return SunSchedV3(c, b, pv=False, name=name)
+    if name == "sunsched3_no_hold":
+        return SunSchedV3(c, b, hold=False, name=name)
     if name == "sunsched":
         return SunSched(c)
     if name == "sunsched_no_defer":
