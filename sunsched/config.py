@@ -44,6 +44,16 @@ class DataCfg:
     serengeti_calib_cameras: int = 3
     serengeti_eval_budget: int = 15000
     serengeti_min_eval_cameras: int = 6
+    # PREREGISTRATION_v2.md test B: a later Serengeti season, excluding every
+    # camera the S10 test used (its eval and calibration cameras).
+    serengeti_exclude_season: str = ""
+    # PREREGISTRATION_v2.md test A: Caltech Camera Traps cameras outside CCT20.
+    cct_new_dir: str = "./data/cct_new"
+    cct_new_train_images: int = 10000
+    cct_new_train_empty_frac: float = 0.2
+    cct_new_calib_cameras: int = 3
+    cct_new_eval_budget: int = 20000
+    cct_new_min_eval_cameras: int = 6
 
 
 @dataclass
@@ -255,6 +265,11 @@ CORPORA: Dict[str, Dict] = {
                   splits=(("train", "cis_val", "cis_test"), "trans_val", "trans_test")),
     "serengeti": dict(site="serengeti", aspect=2048 / 1536, vehicle_classes=("human", "vehicle"),
                       splits=(("train",), "calib", "eval")),
+    # PREREGISTRATION_v2.md held-out tests.
+    "cct_new": dict(site="cct_region", aspect=2048 / 1494, vehicle_classes=("car",),
+                    splits=(("train",), "calib", "eval")),
+    "serengeti11": dict(site="serengeti", aspect=2048 / 1536, vehicle_classes=("human", "vehicle"),
+                        splits=(("train",), "calib", "eval"), season="S11", exclude_season="S10"),
 }
 
 # Frozen trunks and their exit taps (indices into the trunk Sequential). The
@@ -316,6 +331,9 @@ def apply_corpus(cfg: "Config", name: str) -> "Config":
     cfg.task.vehicle_classes = tuple(c["vehicle_classes"])
     train, calib, ev = c["splits"]
     cfg.data.train_splits, cfg.data.calib_split, cfg.data.eval_split = tuple(train), calib, ev
+    if "season" in c:
+        cfg.data.serengeti_season = c["season"]
+        cfg.data.serengeti_exclude_season = c.get("exclude_season", "")
     return cfg
 
 

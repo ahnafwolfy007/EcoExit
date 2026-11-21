@@ -174,7 +174,7 @@ def prereg(cfg):
 
 
 V3 = ["sunsched3", "sunsched3_no_coalesce", "sunsched3_no_pv", "sunsched3_no_hold"]
-V3_DEV2 = ["sunsched3", "sunsched3_no_coalesce", "sunsched3_no_pv", "sunsched3_no_hold"]
+V3_DEV2 = ["sunsched3", "sunsched3_no_coalesce", "sunsched3_no_pv", "sunsched3_no_hold"]   # also iteration 3
 
 
 def v3grid(cfg):

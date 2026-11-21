@@ -149,6 +149,10 @@ def serengeti_metadata(cfg) -> bool:
     from sunsched.data import serengeti as S
     ok = download(S.metadata_url(cfg.data.serengeti_season), S.metadata_zip_path(cfg))
     ok = download(S.SPLITS_URL, S.splits_path(cfg)) and ok
+    if cfg.data.serengeti_exclude_season:     # needed to recompute the earlier test's cameras
+        ex = cfg.data.serengeti_exclude_season
+        ok = download(S.metadata_url(ex), os.path.join(cfg.data.serengeti_dir,
+                                                       f"SnapshotSerengeti{ex}.json.zip")) and ok
     if ok:
         records, names, stats = S.parse_records(S.load_metadata(cfg))
         print(f"  season {cfg.data.serengeti_season}: {stats}")
@@ -158,13 +162,42 @@ def serengeti_metadata(cfg) -> bool:
 def serengeti_images(cfg) -> bool:
     from sunsched.data import serengeti as S
     from sunsched.vision.backbone import input_size
+    from sunsched.data.source import serengeti_excluded_cameras
     records, names, _ = S.parse_records(S.load_metadata(cfg))
-    roles = S.select(records, S.load_splits(cfg), cfg)
+    roles = S.select(records, S.load_splits(cfg), cfg, exclude=serengeti_excluded_cameras(cfg))
     for role, recs in roles.items():
         print(f"  {role:<6} {len(recs):6,} images from {len({r.location for r in recs}):3d} cameras")
     h, w = input_size(max(cfg.vision.resolutions), cfg.vision.aspect)
     wanted = [r for recs in roles.values() for r in recs]
     counts = S.download_images(wanted, cfg, h, w, workers=16)
+    print(f"  {counts}")
+    return counts.get("failed", 0) <= 0.01 * max(len(wanted), 1)
+
+
+# -- Caltech Camera Traps, cameras outside CCT20 (PREREGISTRATION_v2.md test A) ---
+def cct_new_metadata(cfg) -> bool:
+    from sunsched.data import cct_new as N
+    from sunsched.data.serengeti import parse_records
+    ok = download(N.METADATA_URL, N.metadata_zip_path(cfg))
+    ok = download(N.SPLITS_URL, N.splits_path(cfg)) and ok
+    if ok:
+        records, names, stats = parse_records(N.load_metadata(cfg))
+        print(f"  Caltech Camera Traps: {stats}")
+    return ok
+
+
+def cct_new_images(cfg) -> bool:
+    from sunsched.data import cct_new as N
+    from sunsched.data.serengeti import parse_records
+    from sunsched.vision.backbone import input_size
+    records, names, _ = parse_records(N.load_metadata(cfg))
+    roles = N.select(records, N.load_splits(cfg), cfg)
+    for role, recs in roles.items():
+        print(f"  {role:<6} {len(recs):6,} images from {len({r.location for r in recs}):3d} cameras: "
+              f"{sorted({r.location for r in recs}) if role != 'train' else '...'}")
+    h, w = input_size(max(cfg.vision.resolutions), cfg.vision.aspect)
+    wanted = [r for recs in roles.values() for r in recs]
+    counts = N.download_images(wanted, cfg, h, w, workers=16)
     print(f"  {counts}")
     return counts.get("failed", 0) <= 0.01 * max(len(wanted), 1)
 
@@ -175,8 +208,12 @@ def main():
                     help="annotations images pvgis weights cct_meta")
     args = ap.parse_args()
     cfg = load_cfg(args)
-    if cfg.data.corpus == "serengeti":
+    if cfg.data.corpus in ("serengeti", "serengeti11"):
         runners = dict(metadata=lambda: serengeti_metadata(cfg), images=lambda: serengeti_images(cfg),
+                       pvgis=lambda: fetch_pvgis(cfg), weights=fetch_weights)
+        groups = args.only or list(runners)
+    elif cfg.data.corpus == "cct_new":
+        runners = dict(metadata=lambda: cct_new_metadata(cfg), images=lambda: cct_new_images(cfg),
                        pvgis=lambda: fetch_pvgis(cfg), weights=fetch_weights)
         groups = args.only or list(runners)
     else:

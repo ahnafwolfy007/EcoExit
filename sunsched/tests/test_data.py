@@ -99,3 +99,43 @@ def test_serengeti_timestamps_parse():
     from sunsched.data.cct20 import _parse_ts
     assert _parse_ts("2015:07:03 14:22:01").hour == 14
     assert _parse_ts("2015-07-03 14:22:01").minute == 22
+
+
+def _fake_cct(n_cams=14, per_cam=60, seed=1):
+    """COCO Camera Traps JSON with numeric locations, some of them CCT20 ones."""
+    m = fake_meta(n_cams=n_cams, per_cam=per_cam, seed=seed)
+    names = ["38", "40", "1", "2", "3", "4", "5", "6", "9", "10", "11", "12", "13", "14"][:n_cams]
+    for im in m["images"]:
+        cam = im["file_name"].split("/")[1]
+        im["location"] = names[int(cam[1:])] if cam.startswith("C") else "1"
+        im["file_name"] = im["file_name"].split("/")[-1]
+    return m, names
+
+
+def test_cct_new_excludes_cct20_cameras():
+    from sunsched.config import Config, apply_corpus
+    from sunsched.data import cct_new as N
+    meta, names = _fake_cct()
+    records, _, _ = S.parse_records(meta)
+    splits = {"train": set(names[:4]), "val": set(names[4:]) | {"38", "40"}}
+    splits["train"] -= {"38", "40"}
+    cfg = apply_corpus(Config(), "cct_new")
+    cfg.data.cct_new_train_images, cfg.data.cct_new_eval_budget = 150, 150
+    cfg.data.cct_new_min_eval_cameras, cfg.data.cct_new_calib_cameras = 2, 2
+    roles = N.select(records, splits, cfg)
+    used = {r.location for k in ("eval", "calib") for r in roles[k]}
+    assert not used & N.CCT20_LOCATIONS, "a CCT20 camera entered the held-out test"
+    assert roles["eval"] and roles["calib"]
+    assert N.select(records, splits, cfg)["eval"] == roles["eval"]   # deterministic
+
+
+def test_serengeti_exclusion_is_additive():
+    records, _, _ = S.parse_records(fake_meta(n_cams=24))
+    cams = sorted({r.location for r in records})
+    splits = {"train": set(cams[:6]), "val": set(cams[6:])}
+    cfg = cfg_for_test()
+    base = S.select(records, splits, cfg)
+    assert S.select(records, splits, cfg, exclude=frozenset()) == base   # default = frozen S10 rule
+    used = frozenset(r.location for k in ("eval", "calib") for r in base[k])
+    other = S.select(records, splits, cfg, exclude=used)
+    assert not ({r.location for k in ("eval", "calib") for r in other[k]} & used)

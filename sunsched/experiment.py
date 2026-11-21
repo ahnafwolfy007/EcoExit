@@ -104,7 +104,13 @@ def make_policy(name: str, cfg: C.Config):
     if name == "sunsched3_no_hold":
         return SunSchedV3(c, b, hold=False, name=name)
     if name == "sunsched3_iter1":        # development iteration 1 settings, for comparison
-        return SunSchedV3(c, b, forecast_agg="min", hold_level="conformal", name=name)
+        pol = SunSchedV3(c, b, forecast_agg="min", hold_level="conformal", name=name)
+        pol.iter3 = False
+        return pol
+    if name == "sunsched3_iter2":        # development iteration 2 settings, for comparison
+        pol = SunSchedV3(c, b, name=name)
+        pol.iter3 = False
+        return pol
     if name == "sunsched":
         return SunSched(c)
     if name == "sunsched_no_defer":

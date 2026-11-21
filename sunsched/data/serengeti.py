@@ -118,7 +118,7 @@ def load_splits(cfg) -> Dict[str, set]:
 
 
 # -- the pre-registered selection rule ----------------------------------------
-def select(records: Sequence[Record], splits: Dict[str, set], cfg) -> Dict[str, List[Record]]:
+def select(records: Sequence[Record], splits: Dict[str, set], cfg, exclude=frozenset()) -> Dict[str, List[Record]]:
     """Choose training, calibration and evaluation images.
 
     train  whole sequences sampled from official train locations, up to
@@ -137,7 +137,9 @@ def select(records: Sequence[Record], splits: Dict[str, set], cfg) -> Dict[str, 
     """
     d = cfg.data
     train_pool = [r for r in records if r.location in splits["train"]]
-    val_pool = [r for r in records if r.location in splits["val"]]
+    # `exclude` (PREREGISTRATION_v2.md): cameras already used by an earlier test
+    # are removed from the val pool. Empty by default, which is the S10 rule.
+    val_pool = [r for r in records if r.location in splits["val"] and r.location not in exclude]
 
     rng = np.random.default_rng(cfg.vision.seed)
     seqs: Dict[str, List[Record]] = {}

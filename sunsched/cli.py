@@ -10,7 +10,7 @@ from sunsched.config import Config, apply_backbone, apply_corpus, quick
 
 def base_parser(description: str) -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(description=description)
-    ap.add_argument("--corpus", choices=["cct20", "serengeti"], default="cct20",
+    ap.add_argument("--corpus", choices=["cct20", "serengeti", "cct_new", "serengeti11"], default="cct20",
                     help="cct20 = development corpus (the paper); serengeti = held-out test")
     ap.add_argument("--backbone", choices=["mobilenet_v3_large", "resnet50"],
                     default="mobilenet_v3_large", help="frozen trunk for stages 1-2")
@@ -40,6 +40,7 @@ def load_cfg(args) -> Config:
     cfg.data.annotations_dir = f"{root}/cct20/eccv_18_annotation_files"
     cfg.data.pvgis_dir = f"{root}/pvgis"
     cfg.data.serengeti_dir = f"{root}/serengeti"
+    cfg.data.cct_new_dir = f"{root}/cct_new"
     apply_corpus(cfg, getattr(args, "corpus", "cct20") or "cct20")
     apply_backbone(cfg, getattr(args, "backbone", "mobilenet_v3_large") or "mobilenet_v3_large")
     if getattr(args, "solar", None):

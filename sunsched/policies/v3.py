@@ -57,6 +57,7 @@ class SunSchedV3(Policy):
                  forecast_agg: str = "median", hold_level: str = "point"):
         self.c = control_cfg
         self.theta = baseline_cfg.lazy_theta          # same deferral threshold as lazy_defer
+        self.soc_keep = baseline_cfg.lazy_soc_keep    # lazy_defer's buffer, used when a night cannot be reserved
         self.margin = baseline_cfg.ceiling_margin if hold_margin is None else hold_margin
         self.coalesce, self.pv, self.hold = coalesce, pv, hold
         self.k = int(history_days)
@@ -68,6 +69,11 @@ class SunSchedV3(Policy):
         # the iteration-1 settings remain available as named variants.
         self.forecast_agg = forecast_agg
         self.hold_level = hold_level
+        # Development iteration 3 (CCT20 only): the hold judged surplus against
+        # the conformal target, which sits above the hold level, so it kept
+        # releasing itself; cheap wakes still lost to refining at once; and a
+        # battery smaller than one night insisted on an unreachable reserve.
+        self.iter3 = True
         if name:
             self.name = name
 
@@ -98,17 +104,29 @@ class SunSchedV3(Policy):
         return t + spd // 2
 
     def target_j(self, obs: Obs) -> float:
-        """Energy the battery should hold at sunset: floor plus tonight's reserve."""
+        """Energy the battery should hold at sunset: floor plus tonight's reserve.
+        If the battery cannot hold a whole night's reserve, keep lazy_defer's
+        buffer instead of insisting on an unreachable target."""
         if self._bound is None:
             return obs.floor_j + self.c.warmup_target_soc * obs.capacity_j
+        if self.iter3 and obs.floor_j + self._bound >= obs.capacity_j:
+            return max(obs.floor_j, self.soc_keep * obs.capacity_j)
         return min(obs.floor_j + self._bound, obs.capacity_j)
+
+    def _cheap_wake(self) -> bool:
+        """TCP_NODELAY: batching is not worth it when a wake costs less than two refinements."""
+        e = self.ctx.energy
+        return e.wake_j <= 2.0 * e.refine_j[self.refine_op]
 
     # -- daily bookkeeping and the learned hold -----------------------------------
     def on_sunrise(self, obs: Obs):
         # Close yesterday: surplus if it met its reserve at sunset and had energy to spare.
         if self._last_day >= 0:
-            met = getattr(self, "_sunset_energy", 0.0) >= self.target_j(obs) - 1e-9
-            self._surplus.append(bool(met and self._day_curtailed))
+            if self.iter3:      # surplus = the battery reached the level in force (phone-style)
+                self._surplus.append(bool(self._day_curtailed))
+            else:
+                met = getattr(self, "_sunset_energy", 0.0) >= self.target_j(obs) - 1e-9
+                self._surplus.append(bool(met and self._day_curtailed))
         self._last_day = obs.day
         self._day_curtailed = False
         sunset = self._sunset(obs.day, obs.t)
@@ -135,7 +153,14 @@ class SunSchedV3(Policy):
 
     # -- what to defer ------------------------------------------------------------
     def post_triage(self, obs, frame, pred, conf, gain):
-        return "defer" if conf < self.theta else "final"
+        if conf >= self.theta:
+            return "final"
+        if self.iter3 and self._cheap_wake():
+            e = self.ctx.energy
+            need = e.refine_j[self.refine_op] + (0.0 if obs.b_will_wake else e.wake_j)
+            if self.usable_j(obs) >= need:
+                return "now"
+        return "defer"
 
     # -- how much may be spent now -----------------------------------------------
     def _remaining_harvest_j(self, t: int, until: int) -> float:
