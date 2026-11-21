@@ -37,7 +37,8 @@ STRONG_BASELINES = ["ee_now", "ceiling_now", "lazy_defer"]
 # they are built from (see policies/baselines.py).
 REVISION_POLICIES = ["defer_ceiling", "batch_anytime", "ceiling_conformal", "defer_ceiling_conformal"]
 # SunSched v3 and its single-mechanism ablations (policies/v3.py).
-V3_POLICIES = ["sunsched3", "sunsched3_no_coalesce", "sunsched3_no_pv", "sunsched3_no_hold"]
+V3_POLICIES = ["sunsched3", "sunsched3_no_coalesce", "sunsched3_no_pv", "sunsched3_no_hold",
+               "sunsched3_iter1"]
 
 
 # -- config (de)serialisation, so worker processes rebuild the exact config ----
@@ -102,6 +103,8 @@ def make_policy(name: str, cfg: C.Config):
         return SunSchedV3(c, b, pv=False, name=name)
     if name == "sunsched3_no_hold":
         return SunSchedV3(c, b, hold=False, name=name)
+    if name == "sunsched3_iter1":        # development iteration 1 settings, for comparison
+        return SunSchedV3(c, b, forecast_agg="min", hold_level="conformal", name=name)
     if name == "sunsched":
         return SunSched(c)
     if name == "sunsched_no_defer":

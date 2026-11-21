@@ -53,13 +53,21 @@ class SunSchedV3(Policy):
 
     def __init__(self, control_cfg, baseline_cfg, coalesce: bool = True, pv: bool = True,
                  hold: bool = True, name: str = None, history_days: int = 3,
-                 forecast_scale: float = 1.0, hold_margin: float = None):
+                 forecast_scale: float = 1.0, hold_margin: float = None,
+                 forecast_agg: str = "median", hold_level: str = "point"):
         self.c = control_cfg
         self.theta = baseline_cfg.lazy_theta          # same deferral threshold as lazy_defer
         self.margin = baseline_cfg.ceiling_margin if hold_margin is None else hold_margin
         self.coalesce, self.pv, self.hold = coalesce, pv, hold
         self.k = int(history_days)
         self.forecast_scale = float(forecast_scale)
+        # Development iteration 2 (CCT20 only): the minimum over the last days
+        # was too pessimistic at small storage, and holding at the conformal
+        # bound kept the battery fuller than needed. Defaults are now the
+        # median forecast and the point-forecast hold level of ceiling_now;
+        # the iteration-1 settings remain available as named variants.
+        self.forecast_agg = forecast_agg
+        self.hold_level = hold_level
         if name:
             self.name = name
 
@@ -107,8 +115,12 @@ class SunSchedV3(Policy):
         self._bound = self.ctx.forecaster.predict(int(sunset), obs.t)
         self._hold_on = self.hold and len(self._surplus) == self.k and all(self._surplus)
         if self._hold_on and self._bound is not None:
-            self._ceiling = float(np.clip(self.target_j(obs) / obs.capacity_j + self.margin,
-                                          self.c.min_ceiling, 1.0))
+            if self.hold_level == "point":
+                point = self.ctx.forecaster.point(obs.t)
+                level = obs.floor_j + (point if point is not None else self._bound)
+            else:
+                level = self.target_j(obs)
+            self._ceiling = float(np.clip(level / obs.capacity_j + self.margin, self.c.min_ceiling, 1.0))
         else:
             self._ceiling = 1.0
 
@@ -137,7 +149,10 @@ class SunSchedV3(Policy):
             if a < 0:
                 break
             sums.append(self._h[a:max(a, b)].sum())
-        return eta_c * self.forecast_scale * (min(sums) if sums else 0.0)
+        if not sums:
+            return 0.0
+        agg = min(sums) if self.forecast_agg == "min" else float(np.median(sums))
+        return eta_c * self.forecast_scale * agg
 
     def usable_j(self, obs: Obs) -> float:
         """Load-side energy the controller may spend on refinement this slot."""

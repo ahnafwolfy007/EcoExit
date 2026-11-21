@@ -174,6 +174,7 @@ def prereg(cfg):
 
 
 V3 = ["sunsched3", "sunsched3_no_coalesce", "sunsched3_no_pv", "sunsched3_no_hold"]
+V3_DEV2 = ["sunsched3", "sunsched3_no_coalesce", "sunsched3_no_pv", "sunsched3_no_hold"]
 
 
 def v3grid(cfg):
@@ -193,8 +194,14 @@ def v3wake(cfg):
     return jobs
 
 
+def v3grid2(cfg):
+    """Development iteration 2 of v3 on the paper grid (CCT20 only)."""
+    cells = [(a, r) for a in AUTONOMY for r in RATIOS]
+    return cell_jobs(cfg, V3_DEV2, cells, tags=dict(group="v3grid2"))
+
+
 GROUPS = dict(coverage=coverage, grid=grid, sens=sens, wake=wake, latency=latency, sites=sites,
-              prereg=prereg, v3grid=v3grid, v3wake=v3wake)
+              prereg=prereg, v3grid=v3grid, v3wake=v3wake, v3grid2=v3grid2)
 
 
 def git_commit() -> str:
