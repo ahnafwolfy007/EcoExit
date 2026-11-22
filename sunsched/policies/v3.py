@@ -1,44 +1,51 @@
-"""SunSched v3: coalesce the expensive wake, spend the sun you will get back,
-and hold the charge only when the sun is plentiful.
+"""SunSched v3: coalesce the expensive wake, spend the sun you cannot store,
+and hold the charge only while the battery is full of idle energy.
 
-Designed on the CCT20 development corpus after diagnosing why SunSched v1
-lost: v1 refined a frame only if a per-frame "expected gain" estimate cleared
-a threshold, and that estimate is noise (the triage confidence barely varies,
-so the calibration table says "no gain" for most frames). v1 therefore left
-52-81% of frames at the triage label. v3 keeps no per-frame value estimate.
-Every uncertain frame is deferred and refined; the controller decides only
-WHEN to wake the processor and HOW FULL to keep the battery.
+Designed on the CCT20 development corpus only (five iterations, see
+PREREGISTRATION_v2.md) after diagnosing why SunSched v1 lost: v1 refined a
+frame only if a per-frame "expected gain" estimate cleared a threshold, and
+that estimate is noise (the triage confidence barely varies, so the
+calibration table says "no gain" for most frames). v1 therefore left 52-81%
+of frames at the triage label. v3 keeps no per-frame value estimate. Every
+uncertain frame is deferred and refined; the controller decides only WHEN to
+wake the processor and HOW FULL to keep the battery.
 
 Each mechanism is borrowed from a deployed real-world system:
 
 1. Coalesced dispatch (Android Doze maintenance windows; TCP Nagle;
    economic order quantity). The processor wake is a fixed setup cost, so
-   deferred frames are refined in batches. A batch is dispatched only when it
-   is large enough that the wake is no more than the batch's own refinement
-   energy (n >= wake / refine), unless a frame is near its deadline or energy
-   would otherwise be curtailed. As in Doze, there is also one maintenance
-   window per day (solar noon), and a frame that would expire before the next
-   daylight is refined in the last daylight window. When wakes are cheap the
-   threshold is one frame, so the controller degrades gracefully to refining
-   at once.
+   deferred frames are refined in batches. A batch is dispatched only when its
+   refinement energy is at least the wake energy (n >= wake / refine), unless
+   a frame is near its deadline, energy would otherwise be curtailed, it is
+   the daily maintenance window (solar noon), or it is the last daylight
+   chance before a frame expires. When a wake costs less than two
+   refinements, frames are refined at once (TCP_NODELAY).
 
-2. Solar-surplus scheduling (home energy managers that run deferrable loads
-   on forecast PV surplus). In daylight the controller may spend energy now
-   if the rest of today's harvest, forecast pessimistically from the last
-   three days at the same clock times, will still refill the battery to
-   tonight's reserve by sunset. At night it spends only what the remaining
-   night does not need.
+2. PV-overflow spending (solar diverters and home energy managers). In
+   daylight the controller spends what is stored above tonight's reserve, or,
+   if larger, the harvest forecast for the rest of the day (median of the last
+   three days at the same clock times) that the battery could not store under
+   the level in force. At night it spends only what the rest of the night
+   does not need.
 
-3. Learned charge hold (iOS / Android "Optimized Battery Charging"). The
-   battery is held at tonight's conformal reserve plus a margin, but only
-   after the node has shown surplus (it met its reserve at sunset and had
-   energy to spare) on each of the last three days. After a day that ends
-   below the reserve, the hold is released and the battery charges fully.
+3. Reservoir hold (reservoir sizing and operation; charge-controller
+   re-bulk). The hold keeps the charge at floor + max(sequent-peak storage
+   requirement, tonight's conformal reserve) + margin. The sequent-peak
+   requirement (Thomas & Burden 1963) is the largest cumulative deficit of
+   demand (essential load plus the refinement the node asked for) over stored
+   harvest seen so far. The hold engages after three consecutive surplus
+   days; a day is surplus if the battery reached the level in force, or if it
+   ended daylight at or above the hold level and held at least as much at
+   sunrise as the day before (storage above the rule curve and still
+   filling). It is released only when the sunrise energy falls below
+   tonight's reserve, like a charge controller's re-bulk threshold.
 
 4. Earliest-deadline-first order (real-time scheduling): oldest frames first.
 
-All parameters are fixed from first principles or reused from the existing
-configuration; none is tuned per cell.
+No parameter is tuned per cell. The constants are the baselines' (lazy_theta,
+lazy_soc_keep, ceiling_margin, min_ceiling, batch_interval_min, deadline_h),
+plus a three-day history. Earlier development settings remain available as
+named variants (policies sunsched3_iter1 ... sunsched3_iter4, sunsched3_rule).
 """
 from collections import deque
 from typing import List
@@ -56,7 +63,7 @@ class SunSchedV3(Policy):
                  forecast_scale: float = 1.0, hold_margin: float = None,
                  forecast_agg: str = "median", hold_level: str = "point",
                  hold_mode: str = "reservoir", spend_mode: str = "overflow",
-                 hold_engage: str = "full"):
+                 hold_engage: str = "rise"):
         self.c = control_cfg
         self.theta = baseline_cfg.lazy_theta          # same deferral threshold as lazy_defer
         self.soc_keep = baseline_cfg.lazy_soc_keep    # lazy_defer's buffer, used when a night cannot be reserved
@@ -98,6 +105,8 @@ class SunSchedV3(Policy):
         #     storage above the guide curve is idle).
         #   hold_engage "rise": "rule", and the battery held at least as much at
         #     this sunrise as at the previous one (the reservoir is filling).
+        # Selected and frozen: "rise" (31 of 32 cells near-best on CCT20,
+        # against 30 for "rule" and 29 for "full").
         if hold_engage not in ("full", "rule", "rise"):
             raise ValueError(f"hold_engage {hold_engage!r}")
         self.hold_engage = hold_engage

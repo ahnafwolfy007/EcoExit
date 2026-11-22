@@ -113,7 +113,7 @@ def test_ceiling_now_unchanged_by_refactor():
 
 
 V3 = ["sunsched3", "sunsched3_no_coalesce", "sunsched3_no_pv", "sunsched3_no_hold", "sunsched3_fc",
-      "sunsched3_rule", "sunsched3_rise"]
+      "sunsched3_rule", "sunsched3_rise", "sunsched3_iter4"]
 
 
 def test_v3_runs_finalises_and_respects_deadline():
@@ -177,9 +177,17 @@ def test_v3_hold_engage_order():
     under 'full', and the runs agree until the first engagement, so the hold
     engages first under 'rule' and last under 'full'."""
     first = {}
-    for name in ("sunsched3", "sunsched3_rise", "sunsched3_rule"):
+    for name in ("sunsched3_iter4", "sunsched3_rise", "sunsched3_rule"):
         _, ctx, res, _ = run_policy(name, sun=3.0)
         held = np.where(res.ceiling < 1.0)[0]
         first[name] = int(held[0]) if len(held) else ctx.n_slots
     assert first["sunsched3_rule"] < ctx.n_slots, "rule-curve hold never engaged with plenty of sun"
-    assert first["sunsched3_rule"] <= first["sunsched3_rise"] <= first["sunsched3"], first
+    assert first["sunsched3_rule"] <= first["sunsched3_rise"] <= first["sunsched3_iter4"], first
+
+
+def test_frozen_v3_is_the_selected_variant():
+    """The frozen sunsched3 is iteration 5's 'rise' variant, step for step."""
+    _, _, a, _ = run_policy("sunsched3", sun=1.0)
+    _, _, b, _ = run_policy("sunsched3_rise", sun=1.0)
+    assert np.array_equal(a.route, b.route) and np.array_equal(a.final_slot, b.final_slot)
+    assert np.allclose(a.soc, b.soc) and np.allclose(a.ceiling, b.ceiling)

@@ -288,10 +288,19 @@ def v3wake5(cfg):
     return jobs
 
 
+def v3frozen(cfg):
+    """The frozen v3 and its two remaining ablations on the pre-registered grid
+    layout (CCT20). The frozen sunsched3 must reproduce sunsched3_rise of
+    v3grid5 exactly; the ablations are exploratory."""
+    cells = [(a, r) for a in PREREG_AUTONOMY for r in PREREG_RATIOS]
+    return cell_jobs(cfg, ["sunsched3", "sunsched3_no_coalesce", "sunsched3_no_pv"], cells,
+                     tags=dict(group="v3frozen"))
+
+
 GROUPS = dict(coverage=coverage, grid=grid, sens=sens, wake=wake, latency=latency, sites=sites,
               prereg=prereg, v3grid=v3grid, v3wake=v3wake, v3grid2=v3grid2, v3grid4=v3grid4, v3wake4=v3wake4,
               prereg2=prereg2, wake2=wake2, v3grid5=v3grid5, v3ref5=v3ref5, base5reg=base5reg,
-              base5new=base5new, v3wake5=v3wake5)
+              base5new=base5new, v3wake5=v3wake5, v3frozen=v3frozen)
 
 
 def git_commit() -> str:

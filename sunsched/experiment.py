@@ -39,7 +39,7 @@ REVISION_POLICIES = ["defer_ceiling", "batch_anytime", "ceiling_conformal", "def
 # SunSched v3 and its single-mechanism ablations (policies/v3.py).
 V3_POLICIES = ["sunsched3", "sunsched3_no_coalesce", "sunsched3_no_pv", "sunsched3_no_hold",
                "sunsched3_fc", "sunsched3_iter1", "sunsched3_iter2", "sunsched3_iter3",
-               "sunsched3_rule", "sunsched3_rise"]
+               "sunsched3_rule", "sunsched3_rise", "sunsched3_iter4"]
 
 
 # -- config (de)serialisation, so worker processes rebuild the exact config ----
@@ -106,9 +106,11 @@ def make_policy(name: str, cfg: C.Config):
         return SunSchedV3(c, b, hold=False, name=name)
     if name == "sunsched3_rule":         # iteration 5: engage on the reservoir rule curve
         return SunSchedV3(c, b, hold_engage="rule", name=name)
-    if name == "sunsched3_rise":         # iteration 5: rule curve, and the battery is filling
+    if name == "sunsched3_rise":         # iteration 5: rule curve, and the battery is filling (= frozen sunsched3)
         return SunSchedV3(c, b, hold_engage="rise", name=name)
-    if name == "sunsched3_fc":           # iteration 4 hold, iteration 3 spending rule
+    if name == "sunsched3_iter4":        # development iteration 4 settings, for comparison
+        return SunSchedV3(c, b, hold_engage="full", name=name)
+    if name == "sunsched3_fc":           # frozen hold, iteration 3 spending rule
         return SunSchedV3(c, b, spend_mode="forecast", name=name)
     if name == "sunsched3_iter1":        # development iteration 1 settings, for comparison
         pol = SunSchedV3(c, b, forecast_agg="min", hold_level="conformal", hold_mode="learned",
