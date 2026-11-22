@@ -55,7 +55,8 @@ class SunSchedV3(Policy):
                  hold: bool = True, name: str = None, history_days: int = 3,
                  forecast_scale: float = 1.0, hold_margin: float = None,
                  forecast_agg: str = "median", hold_level: str = "point",
-                 hold_mode: str = "reservoir", spend_mode: str = "overflow"):
+                 hold_mode: str = "reservoir", spend_mode: str = "overflow",
+                 hold_engage: str = "full"):
         self.c = control_cfg
         self.theta = baseline_cfg.lazy_theta          # same deferral threshold as lazy_defer
         self.soc_keep = baseline_cfg.lazy_soc_keep    # lazy_defer's buffer, used when a night cannot be reserved
@@ -88,6 +89,18 @@ class SunSchedV3(Policy):
         #     3's rule, "stored" spends only what is stored above the target.
         self.hold_mode = hold_mode
         self.spend_mode = spend_mode
+        # Development iteration 5 (CCT20 only). With the hold off, a day counted
+        # as surplus only if the battery reached 98%, so a large battery that
+        # started at 80% charged for months before the hold engaged.
+        #   hold_engage "full": iteration 4 (the battery reached the level in force).
+        #   hold_engage "rule": also a surplus day if the battery ended daylight at
+        #     or above the level the hold would keep (reservoir rule curve:
+        #     storage above the guide curve is idle).
+        #   hold_engage "rise": "rule", and the battery held at least as much at
+        #     this sunrise as at the previous one (the reservoir is filling).
+        if hold_engage not in ("full", "rule", "rise"):
+            raise ValueError(f"hold_engage {hold_engage!r}")
+        self.hold_engage = hold_engage
         if name:
             self.name = name
 
@@ -107,6 +120,8 @@ class SunSchedV3(Policy):
         self._sp_k = 0.0                             # running cumulative deficit
         self._sp_max = 0.0                           # sequent-peak storage requirement so far
         self._dem_day = -1
+        self._sunset_energy = None                   # stored energy at the last sunset (J)
+        self._rise_energy = None                     # stored energy at the last sunrise (J)
 
     def _sunset(self, day: int, t: int) -> int:
         s = self.ctx.sunset[day] if 0 <= day < len(self.ctx.sunset) else -1
@@ -140,18 +155,21 @@ class SunSchedV3(Policy):
     # -- daily bookkeeping and the learned hold -----------------------------------
     def on_sunrise(self, obs: Obs):
         # Close yesterday: surplus if it met its reserve at sunset and had energy to spare.
-        if self._last_day >= 0:
+        closed, curtailed = self._last_day >= 0, self._day_curtailed
+        judged_later = self.hold_mode == "reservoir" and self.hold_engage != "full"
+        if closed and not judged_later:
             if self.iter3:      # surplus = the battery reached the level in force (phone-style)
-                self._surplus.append(bool(self._day_curtailed))
+                self._surplus.append(bool(curtailed))
             else:
-                met = getattr(self, "_sunset_energy", 0.0) >= self.target_j(obs) - 1e-9
-                self._surplus.append(bool(met and self._day_curtailed))
+                met = (self._sunset_energy or 0.0) >= self.target_j(obs) - 1e-9
+                self._surplus.append(bool(met and curtailed))
         self._last_day = obs.day
         self._day_curtailed = False
         sunset = self._sunset(obs.day, obs.t)
         self._bound = self.ctx.forecaster.predict(int(sunset), obs.t)
         if self.hold_mode == "reservoir":
-            self._reservoir_hold(obs)
+            self._reservoir_hold(obs, closed and judged_later, curtailed)
+            self._rise_energy = obs.energy_j
             return
         self._hold_on = self.hold and len(self._surplus) == self.k and all(self._surplus)
         if self._hold_on and self._bound is not None:
@@ -182,8 +200,22 @@ class SunSchedV3(Policy):
             self._sp_k, self._sp_max = k, m
             self._sp_t = b
 
-    def _reservoir_hold(self, obs: Obs):
+    def _hold_ceiling(self, obs: Obs) -> float:
+        """The state-of-charge ceiling the hold keeps: floor plus the larger of
+        the sequent-peak requirement and tonight's reserve, plus the margin."""
+        level = obs.floor_j + max(self._sp_max, self._bound)
+        return float(np.clip(level / obs.capacity_j + self.margin, self.c.min_ceiling, 1.0))
+
+    def _reservoir_hold(self, obs: Obs, judge: bool = False, curtailed: bool = False):
         self._fold_sequent_peak(obs.t)
+        if judge:                                    # close yesterday against the rule curve
+            flag = curtailed
+            if not flag and self._bound is not None and self._sunset_energy is not None:
+                rule_j = (self._hold_ceiling(obs) - 0.02) * obs.capacity_j
+                flag = self._sunset_energy >= rule_j
+                if flag and self.hold_engage == "rise":
+                    flag = self._rise_energy is not None and obs.energy_j >= self._rise_energy
+            self._surplus.append(bool(flag))
         if not self.hold or self._bound is None:
             self._hold_on, self._ceiling = False, 1.0
             return
@@ -192,12 +224,8 @@ class SunSchedV3(Policy):
             self._hold_on = False                    # re-bulk: tonight's reserve is threatened
             self._surplus.clear()
         elif not self._hold_on and len(self._surplus) == self.k and all(self._surplus):
-            self._hold_on = True                     # full on each of the last k days
-        if self._hold_on:
-            level = obs.floor_j + max(self._sp_max, self._bound)
-            self._ceiling = float(np.clip(level / obs.capacity_j + self.margin, self.c.min_ceiling, 1.0))
-        else:
-            self._ceiling = 1.0
+            self._hold_on = True                     # surplus on each of the last k days
+        self._ceiling = self._hold_ceiling(obs) if self._hold_on else 1.0
 
     def ceiling(self, obs: Obs) -> float:
         self._h[obs.t] = obs.harvest_j

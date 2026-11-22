@@ -112,7 +112,8 @@ def test_ceiling_now_unchanged_by_refactor():
     assert res.ceiling.max() <= 1.0
 
 
-V3 = ["sunsched3", "sunsched3_no_coalesce", "sunsched3_no_pv", "sunsched3_no_hold", "sunsched3_fc"]
+V3 = ["sunsched3", "sunsched3_no_coalesce", "sunsched3_no_pv", "sunsched3_no_hold", "sunsched3_fc",
+      "sunsched3_rule", "sunsched3_rise"]
 
 
 def test_v3_runs_finalises_and_respects_deadline():
@@ -169,3 +170,16 @@ def test_v3_variants_differ_only_where_designed():
     for name in ("sunsched3_fc", "sunsched3_iter1", "sunsched3_iter2", "sunsched3_iter3"):
         _, _, res, _ = run_policy(name, sun=1.0)
         assert np.all(res.final_slot >= 0), name
+
+
+def test_v3_hold_engage_order():
+    """Surplus days under 'rule' include those under 'rise', which include those
+    under 'full', and the runs agree until the first engagement, so the hold
+    engages first under 'rule' and last under 'full'."""
+    first = {}
+    for name in ("sunsched3", "sunsched3_rise", "sunsched3_rule"):
+        _, ctx, res, _ = run_policy(name, sun=3.0)
+        held = np.where(res.ceiling < 1.0)[0]
+        first[name] = int(held[0]) if len(held) else ctx.n_slots
+    assert first["sunsched3_rule"] < ctx.n_slots, "rule-curve hold never engaged with plenty of sun"
+    assert first["sunsched3_rule"] <= first["sunsched3_rise"] <= first["sunsched3"], first

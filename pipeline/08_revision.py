@@ -245,9 +245,53 @@ def wake2(cfg):
     return jobs
 
 
+# Development iteration 5 (CCT20 only), on the layout of the pre-registered test
+# grid (PREREG_AUTONOMY x PREREG_RATIOS), so the development table matches the
+# test design. The paper grid has ratios 0.5, 1 and 2 only, so the baselines
+# are added at 0.75, 1.5 and 3.
+V3_DEV5 = ["sunsched3_rule", "sunsched3_rise"]
+V3_DEV5_REF = ["sunsched3", "sunsched3_no_hold"]
+NEW_RATIOS5 = (0.75, 1.5, 3.0)
+
+
+def v3grid5(cfg):
+    """Iteration 5: the two hold-engage rules on the pre-registered grid layout."""
+    cells = [(a, r) for a in PREREG_AUTONOMY for r in PREREG_RATIOS]
+    return cell_jobs(cfg, V3_DEV5, cells, tags=dict(group="v3grid5"))
+
+
+def v3ref5(cfg):
+    """Iteration 4 and the no-hold ablation on the pre-registered grid layout."""
+    cells = [(a, r) for a in PREREG_AUTONOMY for r in PREREG_RATIOS]
+    return cell_jobs(cfg, V3_DEV5_REF, cells, tags=dict(group="v3ref5"))
+
+
+def base5reg(cfg):
+    """The registered baselines at the pre-registered ratios the paper grid lacks."""
+    cells = [(a, r) for a in PREREG_AUTONOMY for r in NEW_RATIOS5]
+    return cell_jobs(cfg, PAPER_POLICIES, cells, tags=dict(group="base5reg"))
+
+
+def base5new(cfg):
+    """The further comparators at the pre-registered ratios the paper grid lacks."""
+    cells = [(a, r) for a in PREREG_AUTONOMY for r in NEW_RATIOS5]
+    return cell_jobs(cfg, NEW_POLICIES, cells, tags=dict(group="base5new"))
+
+
+def v3wake5(cfg):
+    """Iteration 5 under the pre-registered wake energies (HV5)."""
+    cells = [(a, r) for a in WAKE_AUTONOMY for r in WAKE_RATIOS]
+    jobs = []
+    for w in PREREG2_WAKE_J:
+        jobs += cell_jobs(cfg, V3_DEV5, cells, overrides={"node.tier_b_wake_j": w},
+                          tags=dict(group="v3wake5", param="node.tier_b_wake_j", value=w))
+    return jobs
+
+
 GROUPS = dict(coverage=coverage, grid=grid, sens=sens, wake=wake, latency=latency, sites=sites,
               prereg=prereg, v3grid=v3grid, v3wake=v3wake, v3grid2=v3grid2, v3grid4=v3grid4, v3wake4=v3wake4,
-              prereg2=prereg2, wake2=wake2)
+              prereg2=prereg2, wake2=wake2, v3grid5=v3grid5, v3ref5=v3ref5, base5reg=base5reg,
+              base5new=base5new, v3wake5=v3wake5)
 
 
 def git_commit() -> str:
