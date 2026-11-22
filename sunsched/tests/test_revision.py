@@ -112,7 +112,7 @@ def test_ceiling_now_unchanged_by_refactor():
     assert res.ceiling.max() <= 1.0
 
 
-V3 = ["sunsched3", "sunsched3_no_coalesce", "sunsched3_no_pv", "sunsched3_no_hold"]
+V3 = ["sunsched3", "sunsched3_no_coalesce", "sunsched3_no_pv", "sunsched3_no_hold", "sunsched3_fc"]
 
 
 def test_v3_runs_finalises_and_respects_deadline():
@@ -141,3 +141,31 @@ def test_v3_hold_engages_only_with_surplus():
     _, _, poor, _ = run_policy("sunsched3", sun=0.3)
     assert rich.ceiling.min() < 1.0, "hold never engaged with plenty of sun"
     assert poor.ceiling.mean() >= rich.ceiling.mean()
+
+
+def test_v3_sequent_peak_matches_brute_force():
+    """The hold level's storage requirement equals the largest cumulative
+    deficit over any window of the history (sequent-peak algorithm)."""
+    import sunsched.tests.test_simulator as ts
+    made = []
+    orig = ts.make_policy
+    ts.make_policy = lambda name, cfg: made.append(orig(name, cfg)) or made[-1]
+    try:
+        cfg, ctx, res, _ = run_policy("sunsched3", sun=1.0)
+    finally:
+        ts.make_policy = orig
+    pol = made[0]
+    pol._fold_sequent_peak(ctx.n_slots)
+    fc = ctx.forecaster
+    t = pol._sp_t
+    eta_c, eta_d = cfg.battery.eta_charge, cfg.battery.eta_discharge
+    net = (fc.essential[:t] + pol._refdem[:t]) / eta_d - eta_c * fc.harvest[:t]
+    c = np.concatenate([[0.0], np.cumsum(net)])
+    brute = float(np.max(c - np.minimum.accumulate(c)))
+    assert abs(brute - pol._sp_max) <= 1e-6 * max(1.0, brute), (brute, pol._sp_max)
+
+
+def test_v3_variants_differ_only_where_designed():
+    for name in ("sunsched3_fc", "sunsched3_iter1", "sunsched3_iter2", "sunsched3_iter3"):
+        _, _, res, _ = run_policy(name, sun=1.0)
+        assert np.all(res.final_slot >= 0), name

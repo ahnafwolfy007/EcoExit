@@ -38,7 +38,7 @@ STRONG_BASELINES = ["ee_now", "ceiling_now", "lazy_defer"]
 REVISION_POLICIES = ["defer_ceiling", "batch_anytime", "ceiling_conformal", "defer_ceiling_conformal"]
 # SunSched v3 and its single-mechanism ablations (policies/v3.py).
 V3_POLICIES = ["sunsched3", "sunsched3_no_coalesce", "sunsched3_no_pv", "sunsched3_no_hold",
-               "sunsched3_iter1"]
+               "sunsched3_fc", "sunsched3_iter1", "sunsched3_iter2", "sunsched3_iter3"]
 
 
 # -- config (de)serialisation, so worker processes rebuild the exact config ----
@@ -103,14 +103,19 @@ def make_policy(name: str, cfg: C.Config):
         return SunSchedV3(c, b, pv=False, name=name)
     if name == "sunsched3_no_hold":
         return SunSchedV3(c, b, hold=False, name=name)
+    if name == "sunsched3_fc":           # iteration 4 hold, iteration 3 spending rule
+        return SunSchedV3(c, b, spend_mode="forecast", name=name)
     if name == "sunsched3_iter1":        # development iteration 1 settings, for comparison
-        pol = SunSchedV3(c, b, forecast_agg="min", hold_level="conformal", name=name)
+        pol = SunSchedV3(c, b, forecast_agg="min", hold_level="conformal", hold_mode="learned",
+                         spend_mode="forecast", name=name)
         pol.iter3 = False
         return pol
     if name == "sunsched3_iter2":        # development iteration 2 settings, for comparison
-        pol = SunSchedV3(c, b, name=name)
+        pol = SunSchedV3(c, b, hold_mode="learned", spend_mode="forecast", name=name)
         pol.iter3 = False
         return pol
+    if name == "sunsched3_iter3":        # development iteration 3 settings, for comparison
+        return SunSchedV3(c, b, hold_mode="learned", spend_mode="forecast", name=name)
     if name == "sunsched":
         return SunSched(c)
     if name == "sunsched_no_defer":

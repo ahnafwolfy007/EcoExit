@@ -200,8 +200,54 @@ def v3grid2(cfg):
     return cell_jobs(cfg, V3_DEV2, cells, tags=dict(group="v3grid2"))
 
 
+V3_DEV4 = ["sunsched3", "sunsched3_fc", "sunsched3_no_coalesce", "sunsched3_no_pv", "sunsched3_no_hold"]
+
+
+def v3grid4(cfg):
+    """Development iteration 4 of v3 on the paper grid (CCT20 only): the
+    reservoir hold with both spending rules, and the ablations."""
+    cells = [(a, r) for a in AUTONOMY for r in RATIOS]
+    return cell_jobs(cfg, V3_DEV4, cells, tags=dict(group="v3grid4"))
+
+
+def v3wake4(cfg):
+    """Iteration 4 under the wake-energy sweep, both spending rules."""
+    cells = [(a, r) for a in WAKE_AUTONOMY for r in WAKE_RATIOS]
+    jobs = []
+    for w in WAKE_J:
+        jobs += cell_jobs(cfg, ["sunsched3", "sunsched3_fc"], cells, overrides={"node.tier_b_wake_j": w},
+                          tags=dict(group="v3wake4", param="node.tier_b_wake_j", value=w))
+    return jobs
+
+
+# PREREGISTRATION_v2.md, "Experimental grid" (fixed before either test corpus
+# was downloaded).
+PREREG2_POLICIES = ["always_now", "ee_now", "ceiling_now", "lazy_defer",
+                    "batch_anytime", "defer_ceiling", "ceiling_conformal", "defer_ceiling_conformal",
+                    "sunsched3", "sunsched3_no_coalesce", "sunsched3_no_pv", "sunsched3_no_hold"]
+PREREG2_WAKE_J = (1.0, 2.0, 3.0, 6.0)
+
+
+def prereg2(cfg):
+    """The grid of PREREGISTRATION_v2.md (HV1-HV4)."""
+    cells = [(a, r) for a in PREREG_AUTONOMY for r in PREREG_RATIOS]
+    return cell_jobs(cfg, PREREG2_POLICIES, cells, tags=dict(group="prereg2"))
+
+
+def wake2(cfg):
+    """The wake sweep of PREREGISTRATION_v2.md (HV5)."""
+    cells = [(a, r) for a in WAKE_AUTONOMY for r in WAKE_RATIOS]
+    jobs = []
+    for w in PREREG2_WAKE_J:
+        jobs += cell_jobs(cfg, ["always_now", "lazy_defer", "sunsched3"], cells,
+                          overrides={"node.tier_b_wake_j": w},
+                          tags=dict(group="wake2", param="node.tier_b_wake_j", value=w))
+    return jobs
+
+
 GROUPS = dict(coverage=coverage, grid=grid, sens=sens, wake=wake, latency=latency, sites=sites,
-              prereg=prereg, v3grid=v3grid, v3wake=v3wake, v3grid2=v3grid2)
+              prereg=prereg, v3grid=v3grid, v3wake=v3wake, v3grid2=v3grid2, v3grid4=v3grid4, v3wake4=v3wake4,
+              prereg2=prereg2, wake2=wake2)
 
 
 def git_commit() -> str:

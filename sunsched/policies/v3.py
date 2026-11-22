@@ -54,7 +54,8 @@ class SunSchedV3(Policy):
     def __init__(self, control_cfg, baseline_cfg, coalesce: bool = True, pv: bool = True,
                  hold: bool = True, name: str = None, history_days: int = 3,
                  forecast_scale: float = 1.0, hold_margin: float = None,
-                 forecast_agg: str = "median", hold_level: str = "point"):
+                 forecast_agg: str = "median", hold_level: str = "point",
+                 hold_mode: str = "reservoir", spend_mode: str = "overflow"):
         self.c = control_cfg
         self.theta = baseline_cfg.lazy_theta          # same deferral threshold as lazy_defer
         self.soc_keep = baseline_cfg.lazy_soc_keep    # lazy_defer's buffer, used when a night cannot be reserved
@@ -74,6 +75,19 @@ class SunSchedV3(Policy):
         # releasing itself; cheap wakes still lost to refining at once; and a
         # battery smaller than one night insisted on an unreachable reserve.
         self.iter3 = True
+        # Development iteration 4 (CCT20 only). The hold released itself after
+        # any dull day and then took weeks to re-engage at large storage, and at
+        # small storage it capped a battery whose every joule was needed.
+        #   hold_mode "reservoir": hold level from the sequent-peak storage
+        #     requirement (reservoir sizing, Thomas & Burden 1963) over all
+        #     history; released only when the sunrise energy falls below
+        #     tonight's reserve (a charge controller's re-bulk threshold).
+        #   spend_mode "overflow": in daylight, spend what is stored above
+        #     tonight's target plus the forecast harvest that the battery could
+        #     not store anyway (PV-surplus diversion); "forecast" is iteration
+        #     3's rule, "stored" spends only what is stored above the target.
+        self.hold_mode = hold_mode
+        self.spend_mode = spend_mode
         if name:
             self.name = name
 
@@ -88,6 +102,11 @@ class SunSchedV3(Policy):
         self._day_curtailed = False
         self._ceiling = 1.0
         self._last_day = -1
+        self._refdem = np.zeros(ctx.n_slots)         # refinement energy asked for, per slot
+        self._sp_t = 0                               # next slot to fold into the sequent peak
+        self._sp_k = 0.0                             # running cumulative deficit
+        self._sp_max = 0.0                           # sequent-peak storage requirement so far
+        self._dem_day = -1
 
     def _sunset(self, day: int, t: int) -> int:
         s = self.ctx.sunset[day] if 0 <= day < len(self.ctx.sunset) else -1
@@ -131,6 +150,9 @@ class SunSchedV3(Policy):
         self._day_curtailed = False
         sunset = self._sunset(obs.day, obs.t)
         self._bound = self.ctx.forecaster.predict(int(sunset), obs.t)
+        if self.hold_mode == "reservoir":
+            self._reservoir_hold(obs)
+            return
         self._hold_on = self.hold and len(self._surplus) == self.k and all(self._surplus)
         if self._hold_on and self._bound is not None:
             if self.hold_level == "point":
@@ -138,6 +160,41 @@ class SunSchedV3(Policy):
                 level = obs.floor_j + (point if point is not None else self._bound)
             else:
                 level = self.target_j(obs)
+            self._ceiling = float(np.clip(level / obs.capacity_j + self.margin, self.c.min_ceiling, 1.0))
+        else:
+            self._ceiling = 1.0
+
+    def _fold_sequent_peak(self, t: int):
+        """Sequent-peak algorithm over every slot up to t-1: the running
+        cumulative deficit of demand (essential load plus the refinement the
+        node asked for) over stored harvest, and its maximum so far."""
+        fc = self.ctx.forecaster
+        cfg = self.ctx.cfg
+        eta_c, eta_d = cfg.battery.eta_charge, cfg.battery.eta_discharge
+        a, b = self._sp_t, max(t, self._sp_t)
+        if b > a:
+            net = (fc.essential[a:b] + self._refdem[a:b]) / eta_d - eta_c * fc.harvest[a:b]
+            k, m = self._sp_k, self._sp_max
+            for x in net:
+                k = k + x if k + x > 0.0 else 0.0
+                if k > m:
+                    m = k
+            self._sp_k, self._sp_max = k, m
+            self._sp_t = b
+
+    def _reservoir_hold(self, obs: Obs):
+        self._fold_sequent_peak(obs.t)
+        if not self.hold or self._bound is None:
+            self._hold_on, self._ceiling = False, 1.0
+            return
+        reserve = obs.floor_j + self._bound
+        if self._hold_on and obs.energy_j < reserve:
+            self._hold_on = False                    # re-bulk: tonight's reserve is threatened
+            self._surplus.clear()
+        elif not self._hold_on and len(self._surplus) == self.k and all(self._surplus):
+            self._hold_on = True                     # full on each of the last k days
+        if self._hold_on:
+            level = obs.floor_j + max(self._sp_max, self._bound)
             self._ceiling = float(np.clip(level / obs.capacity_j + self.margin, self.c.min_ceiling, 1.0))
         else:
             self._ceiling = 1.0
@@ -155,6 +212,11 @@ class SunSchedV3(Policy):
     def post_triage(self, obs, frame, pred, conf, gain):
         if conf >= self.theta:
             return "final"
+        e = self.ctx.energy
+        self._refdem[obs.t] += e.refine_j[self.refine_op]
+        if obs.day != self._dem_day:                 # one wake a day is part of the demand
+            self._refdem[obs.t] += e.wake_j
+            self._dem_day = obs.day
         if self.iter3 and self._cheap_wake():
             e = self.ctx.energy
             need = e.refine_j[self.refine_op] + (0.0 if obs.b_will_wake else e.wake_j)
@@ -189,13 +251,21 @@ class SunSchedV3(Policy):
             sunset = self._sunset(obs.day, obs.t)
             slots = max(sunset - obs.t, 0)
             need_until_sunset = 1.2 * slots * e.sleep_j / eta_d
-            if self.pv:
+            stored = here - need_until_sunset - self.target_j(obs)
+            if not self.pv or self.spend_mode == "stored":
+                spend = stored if self.spend_mode == "stored" else here - self.target_j(obs)
+            elif self.spend_mode == "overflow":
+                # Spend what is stored above tonight's target, or, if more, the
+                # forecast harvest that would overflow the level in force.
+                rem = self._remaining_harvest_j(obs.t, sunset)
+                cap = min(self._ceiling, 1.0) * obs.capacity_j
+                overflow = min(here + rem - need_until_sunset - cap, here - obs.floor_j - need_until_sunset)
+                spend = max(stored, overflow)
+            else:
                 rem = self._remaining_harvest_j(obs.t, sunset)
                 after = here + rem - need_until_sunset - self.target_j(obs)
                 # Cannot spend energy that is not in the battery yet.
                 spend = min(after, here - obs.floor_j - need_until_sunset)
-            else:
-                spend = here - self.target_j(obs)
         else:
             rise = self._sunrise_next(obs.t)
             slots = max(rise - obs.t, 0)

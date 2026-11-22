@@ -53,7 +53,10 @@ class DataCfg:
     cct_new_train_empty_frac: float = 0.2
     cct_new_calib_cameras: int = 3
     cct_new_eval_budget: int = 20000
-    cct_new_min_eval_cameras: int = 6
+    # Ten cameras, not six: with the camera as the unit of analysis, an exact
+    # Wilcoxon test on six camera means cannot go below p = 0.031 (two-sided).
+    # Raised before any cct_new or S11 data was downloaded.
+    cct_new_min_eval_cameras: int = 10
 
 
 @dataclass
@@ -269,7 +272,8 @@ CORPORA: Dict[str, Dict] = {
     "cct_new": dict(site="cct_region", aspect=2048 / 1494, vehicle_classes=("car",),
                     splits=(("train",), "calib", "eval")),
     "serengeti11": dict(site="serengeti", aspect=2048 / 1536, vehicle_classes=("human", "vehicle"),
-                        splits=(("train",), "calib", "eval"), season="S11", exclude_season="S10"),
+                        splits=(("train",), "calib", "eval"), season="S11", exclude_season="S10",
+                        min_eval_cameras=10),
 }
 
 # Frozen trunks and their exit taps (indices into the trunk Sequential). The
@@ -334,6 +338,8 @@ def apply_corpus(cfg: "Config", name: str) -> "Config":
     if "season" in c:
         cfg.data.serengeti_season = c["season"]
         cfg.data.serengeti_exclude_season = c.get("exclude_season", "")
+    if "min_eval_cameras" in c:
+        cfg.data.serengeti_min_eval_cameras = c["min_eval_cameras"]
     return cfg
 
 
