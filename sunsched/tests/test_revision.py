@@ -229,3 +229,45 @@ def test_v4_switches_change_behaviour():
     assert not held[0.02][1] and not held[0.033][1], held
     assert held[0.05][1], held
     assert held[0.033][0], f"no case where the guard, not scarcity, kept the hold off: {held}"
+
+
+def test_context_memory_never_looks_ahead_unless_allowed():
+    from sunsched.vision import context as C
+    rng = np.random.default_rng(0)
+    n = 300
+    cams = rng.integers(0, 3, n).astype(str)
+    t = np.sort(rng.integers(0, 5 * 86400, n)).astype(float)
+    t[10:14] = t[10]                              # a burst sharing one timestamp
+    cams[10:14] = "0"
+    order = np.arange(n)
+    for name, (past, fut) in C.VARIANTS.items():
+        idx, mask = C.build_index(cams, t, order, past, fut)
+        assert mask.any() == (name != "none")
+        for i in range(n):
+            m = idx[i][mask[i]]
+            assert i not in m and (cams[m] == cams[i]).all()
+            assert len(set(m.tolist())) == len(m)
+            if fut == 0:
+                assert ((t[m] < t[i]) | ((t[m] == t[i]) & (order[m] < order[i]))).all()
+            assert (t[m] >= t[i] - past).all() and (t[m] <= t[i] + fut).all()
+
+
+def test_context_head_starts_as_plain_head_and_learns_from_memory():
+    import torch
+    from sunsched.vision import context as C
+    h = C.ContextHead(16, 4).eval()
+    x, mem, dt = torch.randn(5, 16), torch.randn(5, C.K, 16), torch.zeros(5, C.K)
+    off, on = torch.zeros(5, C.K, dtype=torch.bool), torch.ones(5, C.K, dtype=torch.bool)
+    assert torch.allclose(h(x, mem, dt, off), h(x, mem, dt, on))
+    # The label is only visible in the NEXT frame: bi can learn it, causal cannot.
+    rng = np.random.default_rng(1)
+    n = 1200
+    y = rng.integers(0, 2, n)
+    X = rng.normal(size=(n, 16)).astype(np.float32)
+    X[1:, 0] += 6.0 * (2 * y[:-1] - 1)
+    t, cams, order = np.arange(n) * 600.0, np.zeros(n).astype(str), np.arange(n)
+    acc = {}
+    for v in ("causal", "bi"):
+        m = C.train_context(X[:900], y[:900], cams[:900], t[:900], order[:900], v, 2, epochs=20)
+        acc[v] = (C.predict(m, X[900:], cams[900:], t[900:], order[900:], *C.VARIANTS[v]).argmax(1) == y[900:]).mean()
+    assert acc["causal"] < 0.62 and acc["bi"] > 0.75, acc
