@@ -24,6 +24,7 @@ from sunsched.policies.baselines import (AlwaysNow, ChargeCeilingEarlyExit, Defe
                                          EnergyAwareEarlyExit, LazyDeferral, TriageOnly)
 from sunsched.policies.ours import SunSched
 from sunsched.policies.v3 import SunSchedV3
+from sunsched.policies.v4 import SunSchedV4
 from sunsched.sim.node import build_node_energy
 from sunsched.sim.outcomes import load_outcomes
 from sunsched.sim.simulator import simulate
@@ -40,6 +41,20 @@ REVISION_POLICIES = ["defer_ceiling", "batch_anytime", "ceiling_conformal", "def
 V3_POLICIES = ["sunsched3", "sunsched3_no_coalesce", "sunsched3_no_pv", "sunsched3_no_hold",
                "sunsched3_fc", "sunsched3_iter1", "sunsched3_iter2", "sunsched3_iter3",
                "sunsched3_rule", "sunsched3_rise", "sunsched3_iter4"]
+
+# v4 candidates: (two_tier, reserve, al_min). "v4_base" must equal sunsched3.
+V4_VARIANTS = {
+    "v4_base": (False, "conformal", 0.0),
+    "v4_tier": (True, "conformal", 0.0),
+    "v4_surv": (False, "survive", 0.0),
+    "v4_merit": (False, "merit", 0.0),
+    "v4_al115": (False, "conformal", 1.15),
+    "v4_al130": (False, "conformal", 1.3),
+    "v4_full_surv": (True, "survive", 1.3),
+    "v4_full_merit": (True, "merit", 1.3),
+    "v4_full_conf": (True, "conformal", 1.3),
+}
+V4_POLICIES = list(V4_VARIANTS)
 
 
 # -- config (de)serialisation, so worker processes rebuild the exact config ----
@@ -123,6 +138,9 @@ def make_policy(name: str, cfg: C.Config):
         return pol
     if name == "sunsched3_iter3":        # development iteration 3 settings, for comparison
         return SunSchedV3(c, b, hold_mode="learned", spend_mode="forecast", name=name)
+    if name in V4_VARIANTS:
+        tier, reserve, al = V4_VARIANTS[name]
+        return SunSchedV4(c, b, two_tier=tier, reserve=reserve, al_min=al, name=name)
     if name == "sunsched":
         return SunSched(c)
     if name == "sunsched_no_defer":

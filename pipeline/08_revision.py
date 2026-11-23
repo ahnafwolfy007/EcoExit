@@ -297,7 +297,20 @@ def v3frozen(cfg):
                      tags=dict(group="v3frozen"))
 
 
-GROUPS = dict(coverage=coverage, grid=grid, sens=sens, wake=wake, latency=latency, sites=sites,
+# -- v4 development screening (cct20, cct_new, serengeti S10 and S11 are all seen data) --
+V4_SCREEN_REF = ["always_now", "lazy_defer", "ee_now", "ceiling_now", "batch_anytime",
+                 "defer_ceiling_conformal", "sunsched3", "sunsched3_no_hold"]
+V4_SCREEN_YEARS = (2011, 2013)
+
+
+def v4screen(cfg):
+    from sunsched.experiment import V4_POLICIES
+    cells = [(a, r) for a in PREREG_AUTONOMY for r in PREREG_RATIOS]
+    cells_jobs = cell_jobs(cfg, V4_SCREEN_REF + V4_POLICIES, cells, tags=dict(group="v4screen"))
+    return [j for j in cells_jobs if int(j["year"]) in V4_SCREEN_YEARS]
+
+
+GROUPS = dict(v4screen=v4screen, coverage=coverage, grid=grid, sens=sens, wake=wake, latency=latency, sites=sites,
               prereg=prereg, v3grid=v3grid, v3wake=v3wake, v3grid2=v3grid2, v3grid4=v3grid4, v3wake4=v3wake4,
               prereg2=prereg2, wake2=wake2, v3grid5=v3grid5, v3ref5=v3ref5, base5reg=base5reg,
               base5new=base5new, v3wake5=v3wake5, v3frozen=v3frozen)

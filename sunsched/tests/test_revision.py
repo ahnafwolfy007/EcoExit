@@ -191,3 +191,41 @@ def test_frozen_v3_is_the_selected_variant():
     _, _, b, _ = run_policy("sunsched3_rise", sun=1.0)
     assert np.array_equal(a.route, b.route) and np.array_equal(a.final_slot, b.final_slot)
     assert np.allclose(a.soc, b.soc) and np.allclose(a.ceiling, b.ceiling)
+
+
+def test_v4_base_equals_frozen_v3():
+    """With every v4 switch off the candidate is the frozen v3, step for step."""
+    for sun in (0.5, 1.0, 3.0):
+        _, _, a, _ = run_policy("sunsched3", sun=sun)
+        _, _, b, _ = run_policy("v4_base", sun=sun)
+        assert np.array_equal(a.route, b.route) and np.array_equal(a.final_slot, b.final_slot)
+        assert np.allclose(a.soc, b.soc) and np.allclose(a.ceiling, b.ceiling)
+
+
+def test_v4_variants_finalise_and_respect_deadline():
+    from sunsched.experiment import V4_POLICIES
+    for name in V4_POLICIES:
+        for sun in (0.5, 1.0, 3.0):
+            cfg, ctx, res, _ = run_policy(name, sun=sun)
+            assert np.all(res.final_slot >= 0), name
+            assert np.all((res.soc >= -1e-9) & (res.soc <= 1 + 1e-9)), name
+            later = res.route == REFINED_LATER
+            assert np.all((res.final_slot - res.capture_slot)[later] <= ctx.deadline_slots), name
+
+
+def test_v4_switches_change_behaviour():
+    """Two-tier refines frames v3 finalised at triage when sun is plentiful, and
+    the array-to-load guard keeps the hold off when harvest barely meets demand."""
+    _, _, a, _ = run_policy("v4_base", sun=3.0)
+    _, _, b, _ = run_policy("v4_tier", sun=3.0)
+    assert (b.route == REFINED_LATER).sum() >= (a.route == REFINED_LATER).sum()
+    # In this harness harvest equals 1.3 times demand near sun = 0.036, so these
+    # three levels sit below, just below and well above the guard.
+    held = {}
+    for sun in (0.02, 0.033, 0.05):
+        _, _, base, _ = run_policy("v4_base", sun=sun)
+        _, _, c, _ = run_policy("v4_al130", sun=sun)
+        held[sun] = (bool((base.ceiling < 1).any()), bool((c.ceiling < 1).any()))
+    assert not held[0.02][1] and not held[0.033][1], held
+    assert held[0.05][1], held
+    assert held[0.033][0], f"no case where the guard, not scarcity, kept the hold off: {held}"
