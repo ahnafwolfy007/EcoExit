@@ -363,6 +363,8 @@ def test_lila_selection_rules():
         for s in range(180):
             t = pd.Timestamp("2021-03-01") + pd.Timedelta(days=float(rng.uniform(0, 900)))
             lab = rng.choice(["Deer", "Fox", "Rare", "Empty", "Human", "Unidentifiable"], p=[.4, .2, .002, .3, .05, .048])
+            if rng.random() < 0.02:
+                lab = "ignore"
             for k in range(3):
                 rows.append(dict(image_id=f"{c}-{s}-{k}", location_id=f"cam {c}", sequence_id=f"{c}-{s}", frame_num=str(k),
                                  datetime=str(t.floor("s") + pd.Timedelta(seconds=k)), original_label=lab,
@@ -376,7 +378,7 @@ def test_lila_selection_rules():
     locs = {k: set(v.location) for k, v in sel.items()}
     assert len(locs["eval"]) == 25 and len(locs["calib"]) == 5
     assert not (locs["eval"] & locs["train"] or locs["eval"] & locs["calib"] or locs["calib"] & locs["train"])
-    assert not {"unknown", "human"} & set(names) and {"empty", "other_animal", "deer", "fox"} <= set(names) and "rare" not in names
+    assert not {"unknown", "human", "ignore", "withheld"} & set(names) and {"empty", "other_animal", "deer", "fox"} <= set(names) and "rare" not in names
     assert st["dropped_people"] > 0 and all("human" not in set(sel[k].label) for k in sel)
     for k in ("eval", "calib"):
         for _, g in sel[k].groupby("location"):

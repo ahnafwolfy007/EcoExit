@@ -7,7 +7,9 @@ Rules, fixed here:
   people    Images of people and vehicles are removed first, in every corpus.
             LILA withholds them (404) in most of these corpora but keeps their
             rows, so a node would otherwise be asked about pictures that do not
-            exist. Eligibility and roles use the remaining images.
+            exist. Eligibility and roles use the remaining images. In the Annamites
+            corpus the publisher keeps them in a folder called private, together
+            with images labelled "ignore"; both are dropped the same way.
   cameras   eligible = at least 200 frames and 60 days between first and last
             capture inside the 365-day window with most captures, and 98% valid
             times. Roles by eligibility.split_cameras: 25 eval, 5 calib, rest
@@ -55,6 +57,7 @@ DATASETS = {
 }
 HUMAN = frozenset({"human", "person", "people", "humans", "homo sapiens"})
 VEHICLE = frozenset({"vehicle", "car", "truck", "motorcycle", "bicycle", "bike", "atv"})
+WITHHELD = frozenset({"ignore"})
 N_EVAL, N_CALIB, MIN_TRAIN = 25, 5, 50
 
 
@@ -72,6 +75,8 @@ def table_path(cfg) -> str:
 
 def simple_label(label: str, common: str) -> str:
     """empty / human / vehicle / unknown / the original label."""
+    if label in WITHHELD:
+        return "withheld"
     for x in (label, common):
         if x in E.EMPTY:
             return "empty"
@@ -109,7 +114,7 @@ def finish_table(raw: pd.DataFrame) -> pd.DataFrame:
     pairs = pd.Series(list(zip(lab, com)))
     cache = {p: simple_label(*p) for p in pairs.unique()}
     label = pairs.map(cache).values
-    rank = pd.Series(label).map(lambda x: {"unknown": 3, "empty": 2, "human": 1, "vehicle": 1}.get(x, 0)).values
+    rank = pd.Series(label).map(lambda x: {"unknown": 3, "empty": 2, "human": 1, "vehicle": 1, "withheld": 1}.get(x, 0)).values
     d = pd.DataFrame(dict(image=raw.image_id.values, location=raw.location_id.values, t=E.parse_times(raw.datetime).values,
                           seq=raw.sequence_id.values, frame=pd.to_numeric(raw.frame_num, errors="coerce").fillna(0).astype(int).values,
                           label=label, url=raw.url_gcp.values, alt=raw.url_aws.values, rank=rank))
@@ -131,7 +136,7 @@ def window_frames(g: pd.DataFrame, cap: int = 5000) -> pd.DataFrame:
 
 
 def select(table: pd.DataFrame, cfg) -> Tuple[Dict[str, pd.DataFrame], List[str], dict]:
-    people = table.label.isin(("human", "vehicle"))
+    people = table.label.isin(("human", "vehicle", "withheld")) | table.url.astype(str).str.contains("/private/", regex=False)
     table = table[~people].reset_index(drop=True)
     known = table[table.label != "unknown"]
     r = roles(table)
