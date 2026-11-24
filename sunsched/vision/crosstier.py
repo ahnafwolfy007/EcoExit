@@ -93,6 +93,8 @@ def _fit(params, step, n, epochs, lr, seed, batch=256):
         perm = rng.permutation(n)
         for s in range(0, n, batch):
             loss = step(perm[s:s + batch])
+            if not loss.requires_grad:          # no frame of this batch has a memory to read
+                continue
             opt.zero_grad(set_to_none=True)
             loss.backward()
             opt.step()

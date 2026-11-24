@@ -463,3 +463,20 @@ def test_score_v3_rules():
     out["pooled"]["gain_lazy_lo"] = -0.01
     out["pooled"]["rho"] = 0.6
     assert Z.verdicts(out)["H1"]["passed"]
+
+
+def test_memory_training_survives_a_batch_without_memory():
+    import torch
+    from sunsched.vision import crosstier as X
+    rng = np.random.default_rng(0)
+    n = 40
+    xq = rng.normal(size=(n, 6)).astype(np.float32)
+    y = rng.integers(0, 3, n)
+    cams = np.array([f"c{i}" for i in range(n)])            # one frame per camera: nothing to remember
+    D = X.Data(xq, xq, xq, y, cams, np.arange(n) * 1000.0, np.zeros(n), X_HORIZON, 60.0, torch.device("cpu"))
+    assert not D.mask.any()
+    net = X.train(D, 3, "full", epochs=2, mem_epochs=2)
+    assert np.isfinite(X.predict(net, D, "full")).all()
+
+
+X_HORIZON = 48 * 3600.0
