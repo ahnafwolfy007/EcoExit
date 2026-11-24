@@ -293,3 +293,63 @@ def test_hypervolume():
     g = (np.stack(np.meshgrid(*[(np.arange(400) + .5) / 400] * 2), -1)).reshape(-1, 2)
     mc = np.mean([(p >= q).all(1).any() for q in g])
     assert abs(hypervolume(p) - mc) < 0.01
+
+
+def _tier_data(n=1500, seed=0):
+    rng = np.random.default_rng(seed)
+    y = rng.integers(0, 3, n)
+    XB, XA = rng.normal(size=(n, 12)).astype(np.float32), rng.normal(size=(n, 6)).astype(np.float32)
+    XB[:, 0] += 2 * (y - 1)
+    XA[:, 0] += 1 * (y - 1)
+    t = np.arange(n) * 600.0
+    cams = np.array([f"c{i // 300}" for i in range(n)])
+    return XA, XB, y, cams, t, np.arange(n)
+
+
+def test_memory_head_empty_memory_is_the_plain_head():
+    import torch
+    from sunsched.vision import crosstier as X
+    XA, XB, y, cams, t, o = _tier_data()
+    D = X.Data(XB, XA, XB, y, cams, t, o, 48 * 3600.0, 60.0, torch.device("cpu"))
+    plain, net = X.train(D, 3, None, epochs=3, seed=0), X.train(D, 3, "full", epochs=3, mem_epochs=2, seed=0)
+    none = torch.zeros(len(y), dtype=torch.bool)
+    assert np.allclose(X.predict(net, D, "full", none), X.predict(plain, D), atol=1e-5)
+    assert not np.allclose(X.predict(net, D, "full"), X.predict(plain, D), atol=1e-3)
+    # mixed memory still has the tier-A slots when nothing was refined
+    _, ma, mb, hb, dt, mk = D.batch(torch.arange(50), "mixed", none)
+    assert mk.any() and not hb.any() and not D.batch(torch.arange(50), "full", none)[5].any()
+
+
+def test_memory_head_learns_from_memory():
+    import torch
+    from sunsched.vision import crosstier as X
+    rng = np.random.default_rng(1)
+    n = 3000
+    cams = np.array([f"c{i // 50}" for i in range(n)])
+    cls = {c: rng.integers(0, 2) for c in np.unique(cams)}          # every camera has one class ...
+    y = np.array([cls[c] for c in cams])
+    XB = rng.normal(size=(n, 8)).astype(np.float32)
+    XB[:, 0] += 0.8 * (2 * y - 1)                                    # ... and a single frame is a weak witness
+    t = np.arange(n) * 600.0
+    D = X.Data(XB, XB, XB, y, cams, t, np.arange(n), 48 * 3600.0, 60.0, torch.device("cpu"))
+    half = np.array([int(c[1:]) % 2 == 0 for c in cams])
+    mk = lambda m, st=None: X.Data(XB[m], XB[m], XB[m], y[m], cams[m], t[m], np.arange(m.sum()), 48 * 3600.0, 60.0, torch.device("cpu"), st)
+    Dt = mk(half)
+    De = mk(~half, Dt.stats)
+    acc = lambda mode: (X.predict(X.train(Dt, 2, mode, epochs=10, mem_epochs=15, seed=0), De, mode).argmax(1) == y[~half]).mean()
+    assert acc("full") > acc(None) + 0.05
+
+
+def test_value_at_budget_and_gain_head():
+    from sunsched.vision import crosstier as X
+    rng = np.random.default_rng(2)
+    n = 2000
+    cams, w = np.array(["a", "b"])[rng.integers(0, 2, n)], np.ones(n)
+    za = rng.normal(size=(n, 3)).astype(np.float32)
+    U = X.gain_features(za, rng.random(n))
+    gain = (U[:, 3] < np.median(U[:, 3])).astype(float)              # refining helps the unsure half
+    r = X.fit_gain(U[:1000], gain[:1000])(U[1000:])
+    va, vb = np.zeros(1000), gain[1000:]
+    f = lambda rank, k: X.value_at_budget(rank, k, va, vb, w[1000:], cams[1000:]).mean()
+    assert f(r, 0.5) > 0.9 * f(vb, 0.5) > f(rng.random(1000), 0.5)
+    assert f(r, 0.0) == 0 and abs(f(r, 1.0) - f(vb, 1.0)) < 1e-12
