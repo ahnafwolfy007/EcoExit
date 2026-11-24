@@ -75,6 +75,7 @@ V5_CAPS = {"v5l": 1.0, **{f"v5l_c{int(100 * c)}": c for c in (0.85, 0.7, 0.6, 0.
 # Third look: as v5l with the standard margin (0.10) and the buffer rule; (late, cap).
 V6_VARIANTS = {"v6": (True, 1.0), **{f"v6_c{int(100 * c)}": (True, c) for c in (0.85, 0.7, 0.6, 0.5, 0.4)},
                "v6_early": (False, 1.0), "v6_early_c50": (False, 0.5)}
+QTEST_FRONT = ["v6", "v6_c85", "v6_c70", "v6_c60", "v6_c50", "v6_c40"]   # frozen in PREREGISTRATION_v3.md
 LAZY_CEILINGS = {f"lazy_c{int(100 * c)}": c for c in (0.4, 0.5, 0.6, 0.7, 0.85)}
 
 

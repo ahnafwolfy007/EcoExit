@@ -335,7 +335,26 @@ def v6screen(cfg):
     return [dict(j, warmup_days=365) for j in jobs if int(j["year"]) in V4_SCREEN_YEARS]
 
 
-GROUPS = dict(v6screen=v6screen, v5capscreen=v5capscreen, v5screen=v5screen, v4screen=v4screen, coverage=coverage, grid=grid, sens=sens, wake=wake, latency=latency, sites=sites,
+QTEST_CELLS = [(a, r) for a in (0.5, 1, 2) for r in (1.0, 1.5, 2.0)] +               [(a, r) for a in (5, 10) for r in (1.0, 1.5, 2.0)] + [(a, r) for a in (30, 100) for r in (1.5, 2.0)]
+QTEST_YEARS = (2019, 2021, 2023)
+
+
+def qtest(cfg):
+    """PREREGISTRATION_v3.md: the frozen test on a new corpus, run once."""
+    from sunsched.experiment import LAZY_CEILINGS, QTEST_FRONT
+    pol = ["always_now", "ceiling_now", "lazy_defer", "sunsched3"] + list(LAZY_CEILINGS) + list(QTEST_FRONT)
+    jobs = cell_jobs(cfg, pol, QTEST_CELLS, tags=dict(group="qtest"))
+    return [dict(j, warmup_days=365) for j in jobs if int(j["year"]) in QTEST_YEARS]
+
+
+def qsmoke(cfg):
+    """A few jobs of qtest, to check the pipeline on a corpus that is not a test corpus."""
+    jobs = [j for j in qtest(cfg) if int(j["year"]) == 2021 and float(j["tag_autonomy"]) in (1.0, 30.0) and float(j["ratio"]) == 1.5]
+    keep = sorted({j["location"] for j in jobs})[:3]
+    return [j for j in jobs if j["location"] in keep]
+
+
+GROUPS = dict(qsmoke=qsmoke, qtest=qtest, v6screen=v6screen, v5capscreen=v5capscreen, v5screen=v5screen, v4screen=v4screen, coverage=coverage, grid=grid, sens=sens, wake=wake, latency=latency, sites=sites,
               prereg=prereg, v3grid=v3grid, v3wake=v3wake, v3grid2=v3grid2, v3grid4=v3grid4, v3wake4=v3wake4,
               prereg2=prereg2, wake2=wake2, v3grid5=v3grid5, v3ref5=v3ref5, base5reg=base5reg,
               base5new=base5new, v3wake5=v3wake5, v3frozen=v3frozen)
@@ -358,9 +377,10 @@ def main():
     if not os.path.exists(f"{cfg.artifacts_dir}/outcomes.npz"):
         sys.exit(f"{cfg.artifacts_dir}/outcomes.npz not found. Point --out at the folder of the "
                  f"earlier full run (the one holding artifacts/), or run stages 1-3 first.")
-    cfg.aging.variant_k_sigmas = KSIG
-    cfg.aging.variant_k_Ts = KT
-    cfg.control.shadow_alphas = ALPHAS
+    if args.only not in (["qtest"], ["qsmoke"]):            # variants that the frozen test does not score
+        cfg.aging.variant_k_sigmas = KSIG
+        cfg.aging.variant_k_Ts = KT
+        cfg.control.shadow_alphas = ALPHAS
 
     out = f"{cfg.results_dir}/tables/revision"
     os.makedirs(out, exist_ok=True)
