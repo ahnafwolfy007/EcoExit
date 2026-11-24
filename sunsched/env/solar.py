@@ -54,6 +54,8 @@ def fetch_pvgis(lat: float, lon: float, start: int, end: int, cache_dir: str,
     covers every site this project uses. Raises rather than silently switching
     to synthetic data.
     """
+    import time
+    import urllib.error
     import urllib.parse
     import urllib.request
 
@@ -72,8 +74,16 @@ def fetch_pvgis(lat: float, lon: float, start: int, end: int, cache_dir: str,
             url = endpoint + "?" + urllib.parse.urlencode({**base, **extra})
             try:
                 req = urllib.request.Request(url, headers={"User-Agent": "SunSched/2.0"})
-                with urllib.request.urlopen(req, timeout=timeout) as r:
-                    data = json.loads(r.read().decode())
+                data = None
+                for k in range(4):                 # the service drops connections now and then
+                    try:
+                        with urllib.request.urlopen(req, timeout=timeout) as r:
+                            data = json.loads(r.read().decode())
+                        break
+                    except (ConnectionError, TimeoutError, OSError) as e:
+                        if isinstance(e, urllib.error.HTTPError) or k == 3:
+                            raise
+                        time.sleep(10 * (k + 1))
                 if data.get("outputs", {}).get("hourly"):
                     with open(path, "w", encoding="utf-8") as f:
                         json.dump(data, f)

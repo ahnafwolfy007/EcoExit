@@ -2,6 +2,7 @@
 """WP2: PVGIS 5.3 hourly weather, 2019-2023, for the six SolCascade climates."""
 import os
 import sys
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -11,7 +12,7 @@ from sunsched.cli import banner, base_parser, write_csv
 from sunsched.config import SITES
 from sunsched.env.solar import fetch_pvgis, pvgis_year
 
-CLIMATES = {"C1": "annamites", "C2": "meta", "C3": "white_mtns", "C4": "skukuza", "C5": "wellington", "C6": "bergen"}
+CLIMATES = {"C1": "annamites", "C2": "meta", "C3": "white_mtns", "C4": "skukuza", "C4b": "nkhotakota", "C5": "wellington", "C6": "bergen"}
 YEARS = (2019, 2020, 2021, 2022, 2023)
 V53 = ("https://re.jrc.ec.europa.eu/api/v5_3/seriescalc",)
 
@@ -50,6 +51,7 @@ def main():
     rows = []
     for c, site in CLIMATES.items():
         s = SITES[site]
+        time.sleep(3)
         data = fetch_pvgis(s["lat"], s["lon"], YEARS[0], YEARS[-1], cache, endpoints=V53)
         r = check(site, data)
         rows += [dict(climate=c, **x) for x in r]

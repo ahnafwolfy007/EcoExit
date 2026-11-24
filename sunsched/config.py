@@ -268,6 +268,7 @@ SITES: Dict[str, Dict] = {
     "meta":       dict(lat=4.15, lon=-73.63, utc_offset=-5, colocated=True),
     "white_mtns": dict(lat=44.05, lon=-71.30, utc_offset=-5, colocated=True),
     "skukuza":    dict(lat=-24.99, lon=31.59, utc_offset=2, colocated=True),
+    "nkhotakota": dict(lat=-12.90, lon=34.10, utc_offset=2, colocated=True),
     "wellington": dict(lat=-41.29, lon=174.78, utc_offset=12, colocated=True),
 }
 

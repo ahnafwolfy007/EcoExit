@@ -133,8 +133,8 @@ def _meta(n_cam=40, n=400, days=200, seed=0, empty=0.4, bad_time=0.0, species=14
     rows = []
     for c in range(n_cam):
         t = pd.Timestamp("2020-01-01") + pd.to_timedelta(np.sort(rng.uniform(0, days * 86400, n)), unit="s")
-        t = t.to_series(index=range(n)).dt.floor("s")
-        t[rng.random(n) < bad_time] = pd.NaT
+        t = pd.Series(np.array(t.floor("s")))
+        t = t.mask(rng.random(n) < bad_time)
         lab = np.where(rng.random(n) < empty, "empty", [f"sp{k}" for k in rng.integers(0, species, n)])
         rows.append(pd.DataFrame(dict(location=f"c{c}", t=t, label=lab)))
     d = pd.concat(rows, ignore_index=True)
