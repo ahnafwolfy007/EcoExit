@@ -77,7 +77,7 @@ V6_VARIANTS = {"v6": (True, 1.0), **{f"v6_c{int(100 * c)}": (True, c) for c in (
                "v6_early": (False, 1.0), "v6_early_c50": (False, 0.5)}
 # Fourth look: v6 with the fallback to lazy deferral where a night does not fit; cap.
 V7_VARIANTS = {"v7": 1.0, **{f"v7_c{int(100 * c)}": c for c in (0.85, 0.7, 0.6, 0.5, 0.4)}}
-QTEST_FRONT = ["v6", "v6_c85", "v6_c70", "v6_c60", "v6_c50", "v6_c40"]   # frozen in PREREGISTRATION_v3.md
+QTEST_FRONT = ["v7", "v7_c85", "v7_c70", "v7_c60", "v7_c50", "v7_c40"]   # frozen in PREREGISTRATION_v3.md
 LAZY_CEILINGS = {f"lazy_c{int(100 * c)}": c for c in (0.4, 0.5, 0.6, 0.7, 0.85)}
 
 
