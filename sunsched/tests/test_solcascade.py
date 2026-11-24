@@ -353,3 +353,47 @@ def test_value_at_budget_and_gain_head():
     f = lambda rank, k: X.value_at_budget(rank, k, va, vb, w[1000:], cams[1000:]).mean()
     assert f(r, 0.5) > 0.9 * f(vb, 0.5) > f(rng.random(1000), 0.5)
     assert f(r, 0.0) == 0 and abs(f(r, 1.0) - f(vb, 1.0)) < 1e-12
+
+
+def test_lila_selection_rules():
+    from sunsched.data import lila
+    rng = np.random.default_rng(5)
+    rows = []
+    for c in range(45):
+        for s in range(150):
+            t = pd.Timestamp("2021-03-01") + pd.Timedelta(days=float(rng.uniform(0, 900)))
+            lab = rng.choice(["Deer", "Fox", "Rare", "Empty", "Human", "Unidentifiable"], p=[.4, .2, .002, .3, .05, .048])
+            for k in range(3):
+                rows.append(dict(image_id=f"{c}-{s}-{k}", location_id=f"cam {c}", sequence_id=f"{c}-{s}", frame_num=str(k),
+                                 datetime=str(t.floor("s") + pd.Timedelta(seconds=k)), original_label=lab,
+                                 common_name=lab.lower(), url_gcp=f"https://x/a b/{c}-{s}-{k}.JPG", url_aws=f"https://y/{c}-{s}-{k}.JPG"))
+    raw = pd.DataFrame(rows)
+    raw = pd.concat([raw, raw.iloc[:1].assign(original_label="Empty", common_name="empty")])   # a second label
+    T = lila.finish_table(raw)
+    assert len(T) == 45 * 450 and T.image.is_unique
+    cfg = Config()
+    sel, names, st = lila.select(T, cfg)
+    locs = {k: set(v.location) for k, v in sel.items()}
+    assert len(locs["eval"]) == 25 and len(locs["calib"]) == 5
+    assert not (locs["eval"] & locs["train"] or locs["eval"] & locs["calib"] or locs["calib"] & locs["train"])
+    assert "unknown" not in names and {"empty", "human", "other_animal", "deer", "fox"} <= set(names) and "rare" not in names
+    for k in ("eval", "calib"):
+        for _, g in sel[k].groupby("location"):
+            assert g.t.max() - g.t.min() <= pd.Timedelta(days=365) and g.t.is_monotonic_increasing
+            from sunsched.env.events import slot_in_year
+            assert len(np.unique(slot_in_year([x.to_pydatetime() for x in g.t], 5))) > 0.3 * len(g) / 3
+    assert len(sel["train"]) <= cfg.data.lila_train_images
+    assert all(a.equals(b) for a, b in zip(lila.select(T, cfg)[0].values(), sel.values()))
+    assert lila.quote("https://x/a b/1.JPG") == "https://x/a%20b/1.JPG"
+    r = lila.to_records(sel["eval"])[0]
+    assert r.timestamp.year >= 2021 and r.label in names
+
+
+def test_lila_corpora_use_their_own_sun():
+    from sunsched.config import CORPORA, FIRST_SITES, SITES, apply_corpus, pvgis_range, weather_sites
+    cfg = apply_corpus(Config(), "lila_swg")
+    assert cfg.solar.years == (2019, 2020, 2021, 2022, 2023) and pvgis_range(cfg) == (2019, 2023)
+    assert list(weather_sites(cfg)) == ["annamites"]
+    old = apply_corpus(Config(), "cct20")
+    assert pvgis_range(old) == (2011, 2015) and tuple(weather_sites(old)) == FIRST_SITES
+    assert all(c["site"] in SITES for c in CORPORA.values())

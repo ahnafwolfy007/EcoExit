@@ -5,12 +5,12 @@ import json
 import os
 from typing import Iterable, List
 
-from sunsched.config import Config, apply_backbone, apply_corpus, quick
+from sunsched.config import CORPORA, Config, apply_backbone, apply_corpus, quick
 
 
 def base_parser(description: str) -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(description=description)
-    ap.add_argument("--corpus", choices=["cct20", "serengeti", "cct_new", "serengeti11"], default="cct20",
+    ap.add_argument("--corpus", choices=sorted(CORPORA), default="cct20",
                     help="cct20 = development corpus (the paper); serengeti = held-out test")
     ap.add_argument("--backbone", choices=["mobilenet_v3_large", "resnet50"],
                     default="mobilenet_v3_large", help="frozen trunk for stages 1-2")

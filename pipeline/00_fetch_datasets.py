@@ -24,7 +24,7 @@ import zipfile
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from sunsched.cli import base_parser, banner, load_cfg, write_json
-from sunsched.config import SITES, pvgis_range
+from sunsched.config import pvgis_range, weather_sites
 
 LILA = "https://storage.googleapis.com/public-datasets-lila/caltechcameratraps"
 FILES = {
@@ -110,9 +110,9 @@ def fetch_images(cfg) -> bool:
 
 def fetch_pvgis(cfg) -> bool:
     from sunsched.env.solar import fetch_pvgis
-    start, end = pvgis_range()
+    start, end = pvgis_range(cfg)
     ok = True
-    for site, s in SITES.items():
+    for site, s in weather_sites(cfg).items():
         try:
             data = fetch_pvgis(s["lat"], s["lon"], start, end, cfg.data.pvgis_dir)
             h = data["outputs"]["hourly"]
@@ -202,6 +202,25 @@ def cct_new_images(cfg) -> bool:
     return counts.get("failed", 0) <= 0.01 * max(len(wanted), 1)
 
 
+# -- new LILA corpora (PREREGISTRATION_v3.md) ---------------------------------------
+def lila_metadata(cfg) -> bool:
+    from sunsched.data import lila
+    if not download(lila.CSV_URL, lila.csv_path(cfg)):
+        return False
+    _, names, stats = lila.load(cfg)
+    print(f"  {cfg.data.corpus}: " + ", ".join(f"{k}={v}" for k, v in stats.items() if k != "alt"))
+    return True
+
+
+def lila_images(cfg) -> bool:
+    from sunsched.data import lila
+    from sunsched.vision.backbone import input_size
+    h, w = input_size(max(cfg.vision.resolutions), cfg.vision.aspect)
+    counts = lila.download_images(cfg, h, w)
+    print(f"  {counts}")
+    return counts.get("failed", 0) <= 0.01 * max(sum(counts.values()), 1)
+
+
 def main():
     ap = base_parser(__doc__)
     ap.add_argument("--only", nargs="*", default=None,
@@ -214,6 +233,10 @@ def main():
         groups = args.only or list(runners)
     elif cfg.data.corpus == "cct_new":
         runners = dict(metadata=lambda: cct_new_metadata(cfg), images=lambda: cct_new_images(cfg),
+                       pvgis=lambda: fetch_pvgis(cfg), weights=fetch_weights)
+        groups = args.only or list(runners)
+    elif cfg.data.corpus.startswith("lila_"):
+        runners = dict(metadata=lambda: lila_metadata(cfg), images=lambda: lila_images(cfg),
                        pvgis=lambda: fetch_pvgis(cfg), weights=fetch_weights)
         groups = args.only or list(runners)
     else:

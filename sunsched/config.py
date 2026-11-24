@@ -57,6 +57,9 @@ class DataCfg:
     # Wilcoxon test on six camera means cannot go below p = 0.031 (two-sided).
     # Raised before any cct_new or S11 data was downloaded.
     cct_new_min_eval_cameras: int = 10
+    # PREREGISTRATION_v3.md test corpora (sunsched/data/lila.py).
+    lila_train_images: int = 10000
+    lila_train_empty_frac: float = 0.2
 
 
 @dataclass
@@ -269,8 +272,11 @@ SITES: Dict[str, Dict] = {
     "white_mtns": dict(lat=44.05, lon=-71.30, utc_offset=-5, colocated=True),
     "skukuza":    dict(lat=-24.99, lon=31.59, utc_offset=2, colocated=True),
     "nkhotakota": dict(lat=-12.90, lon=34.10, utc_offset=2, colocated=True),
+    "idaho":      dict(lat=45.0, lon=-115.0, utc_offset=-7, colocated=True),
     "wellington": dict(lat=-41.29, lon=174.78, utc_offset=12, colocated=True),
 }
+
+FIRST_SITES = ("cct_region", "phoenix", "nairobi", "dhaka", "munich", "bergen", "serengeti")
 
 # Per-corpus settings, copied into a Config by `apply_corpus`.
 CORPORA: Dict[str, Dict] = {
@@ -284,6 +290,12 @@ CORPORA: Dict[str, Dict] = {
     "serengeti11": dict(site="serengeti", aspect=2048 / 1536, vehicle_classes=("human", "vehicle"),
                         splits=(("train",), "calib", "eval"), season="S11", exclude_season="S10",
                         min_eval_cameras=10),
+    # New unseen corpora (PREREGISTRATION_v3.md), each under its own recent sun.
+    **{f"lila_{k}": dict(site=s, aspect=4 / 3, vehicle_classes=("human", "vehicle"),
+                         splits=(("train",), "calib", "eval"), years=(2019, 2020, 2021, 2022, 2023))
+       for k, s in (("swg", "annamites"), ("orinoquia", "meta"), ("ammonitor", "white_mtns"),
+                    ("nkhotakota", "nkhotakota"), ("wellington", "wellington"), ("idaho", "idaho"),
+                    ("nz", "wellington"), ("wcs", "meta"), ("safrica", "skukuza"))},
 }
 
 # Frozen trunks and their exit taps (indices into the trunk Sequential). The
@@ -348,6 +360,8 @@ def apply_corpus(cfg: "Config", name: str) -> "Config":
     if "season" in c:
         cfg.data.serengeti_season = c["season"]
         cfg.data.serengeti_exclude_season = c.get("exclude_season", "")
+    if "years" in c:
+        cfg.solar.years = tuple(c["years"])
     if "min_eval_cameras" in c:
         cfg.data.serengeti_min_eval_cameras = c["min_eval_cameras"]
     return cfg
@@ -361,11 +375,20 @@ def apply_backbone(cfg: "Config", name: str) -> "Config":
     return cfg
 
 
-def pvgis_range() -> Tuple[int, int]:
+def pvgis_range(cfg=None) -> Tuple[int, int]:
     """Years fetched from PVGIS. Always the full default set, so the download
     cache is shared between quick and full runs."""
     years = SolarCfg().years
+    if cfg is not None and cfg.data.corpus.startswith("lila_"):
+        years = cfg.solar.years
     return min(years), max(years)
+
+
+def weather_sites(cfg) -> Dict[str, Dict]:
+    """Sites whose weather a corpus needs: all for the first corpora, its own for a new one."""
+    if cfg.data.corpus.startswith("lila_"):
+        return {cfg.experiment.main_site: SITES[cfg.experiment.main_site]}
+    return {k: v for k, v in SITES.items() if k in FIRST_SITES}
 
 
 def quick(cfg: Config) -> Config:

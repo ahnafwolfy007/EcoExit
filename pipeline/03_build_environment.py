@@ -18,7 +18,7 @@ from datetime import datetime
 import numpy as np
 
 from sunsched.cli import banner, base_parser, load_cfg, write_csv, write_json
-from sunsched.config import SITES, pvgis_range
+from sunsched.config import SITES, pvgis_range, weather_sites
 from sunsched.data import source
 from sunsched.env import solar as S
 from sunsched.env.events import build_streams, diel_profile, slot_in_year
@@ -30,9 +30,9 @@ from sunsched.sim.outcomes import load_outcomes
 def build_solar(cfg) -> dict:
     out_dir = f"{cfg.artifacts_dir}/solar"
     os.makedirs(out_dir, exist_ok=True)
-    start, end = pvgis_range()
+    start, end = pvgis_range(cfg)
     years = {}
-    for site, s in SITES.items():
+    for site, s in weather_sites(cfg).items():
         if cfg.solar.source == "pvgis":
             try:
                 data = S.fetch_pvgis(s["lat"], s["lon"], start, end, cfg.data.pvgis_dir)

@@ -11,7 +11,7 @@ from typing import Dict, Iterable, Iterator, List, Tuple
 import copy
 import os
 
-from sunsched.data import cct20, cct_new, serengeti
+from sunsched.data import cct20, cct_new, lila, serengeti
 from sunsched.data.cct20 import Record
 
 
@@ -49,6 +49,11 @@ def load_splits(cfg, quick: bool = False) -> Tuple[Dict[str, List[Record]], List
         roles = {k: [r for r in v if os.path.exists(cct_new.cache_path(cfg, r.file_name))]
                  for k, v in roles.items()}
         return roles, names
+    if cfg.data.corpus.startswith("lila_"):
+        roles, names, _ = lila.load(cfg)
+        _check_disjoint(roles)
+        roles = {k: [r for r in v if os.path.exists(lila.cache_path(cfg, r.file_name))] for k, v in roles.items()}
+        return roles, names
     raise ValueError(f"unknown corpus {cfg.data.corpus}")
 
 
@@ -80,6 +85,8 @@ def image_source(cfg, wanted: Iterable[str], images_dir: str = "") -> Iterator[T
         return serengeti.iter_cached(cfg, wanted)
     if cfg.data.corpus == "cct_new":
         return cct_new.iter_cached(cfg, wanted)
+    if cfg.data.corpus.startswith("lila_"):
+        return lila.iter_cached(cfg, wanted)
     src = images_dir or cfg.data.images_dir
     if src:
         return cct20.iter_directory(src, wanted)
@@ -95,5 +102,7 @@ def all_records(cfg) -> List[Record]:
     if cfg.data.corpus == "cct_new":
         records, _, _ = serengeti.parse_records(cct_new.load_metadata(cfg))
         return [r for r in records if r.location not in cct_new.CCT20_LOCATIONS]
+    if cfg.data.corpus.startswith("lila_"):      # the evaluation cameras' selected windows
+        return lila.load(cfg)[0]["eval"]
     ann = cfg.data.annotations_dir
     return [r for s in cct20.SPLITS for r in cct20.load_split(ann, s)]
