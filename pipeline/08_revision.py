@@ -319,7 +319,15 @@ def v5screen(cfg):
     return [dict(j, warmup_days=365) for j in jobs if int(j["year"]) in V4_SCREEN_YEARS]
 
 
-GROUPS = dict(v5screen=v5screen, v4screen=v4screen, coverage=coverage, grid=grid, sens=sens, wake=wake, latency=latency, sites=sites,
+def v5capscreen(cfg):
+    """The v5 front with a cap, on the cells and years of v5screen."""
+    from sunsched.experiment import V5_CAPS
+    cells = [(a, r) for a in (0.5, 1, 2, 5, 10, 30, 100) for r in (1.0, 1.5, 2.0)]
+    jobs = cell_jobs(cfg, list(V5_CAPS), cells, tags=dict(group="v5capscreen"))
+    return [dict(j, warmup_days=365) for j in jobs if int(j["year"]) in V4_SCREEN_YEARS]
+
+
+GROUPS = dict(v5capscreen=v5capscreen, v5screen=v5screen, v4screen=v4screen, coverage=coverage, grid=grid, sens=sens, wake=wake, latency=latency, sites=sites,
               prereg=prereg, v3grid=v3grid, v3wake=v3wake, v3grid2=v3grid2, v3grid4=v3grid4, v3wake4=v3wake4,
               prereg2=prereg2, wake2=wake2, v3grid5=v3grid5, v3ref5=v3ref5, base5reg=base5reg,
               base5new=base5new, v3wake5=v3wake5, v3frozen=v3frozen)

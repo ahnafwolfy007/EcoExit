@@ -70,6 +70,8 @@ V5_VARIANTS = {
     "v5_nohold": (True, True, None),
 }
 V5_POLICIES = list(V5_VARIANTS)
+# Second look: late wakes only (the backoff changed nothing on S10), hold margin 0.25, and a cap.
+V5_CAPS = {"v5l": 1.0, **{f"v5l_c{int(100 * c)}": c for c in (0.85, 0.7, 0.6, 0.5, 0.4)}}
 LAZY_CEILINGS = {f"lazy_c{int(100 * c)}": c for c in (0.4, 0.5, 0.6, 0.7, 0.85)}
 
 
@@ -161,6 +163,8 @@ def make_policy(name: str, cfg: C.Config):
         back, late, margin = V5_VARIANTS[name]
         return SunSchedV5(c, b, backoff=back, late=late, margin=0.1 if margin is None else margin,
                           hold=margin is not None, name=name)
+    if name in V5_CAPS:
+        return SunSchedV5(c, b, backoff=False, late=True, margin=0.25, cap=V5_CAPS[name], name=name)
     if name in LAZY_CEILINGS:
         return LazyCeiling(b.lazy_theta, b.lazy_soc_on, b.lazy_soc_keep, interval, LAZY_CEILINGS[name], name)
     if name == "sunsched":

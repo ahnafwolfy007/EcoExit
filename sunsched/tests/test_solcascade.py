@@ -397,3 +397,14 @@ def test_lila_corpora_use_their_own_sun():
     old = apply_corpus(Config(), "cct20")
     assert pvgis_range(old) == (2011, 2015) and tuple(weather_sites(old)) == FIRST_SITES
     assert all(c["site"] in SITES for c in CORPORA.values())
+
+
+def test_v5_cap_limits_charge_and_cap_one_changes_nothing():
+    from sunsched.tests.test_simulator import run
+    a = _v5(0.3, backoff=False, margin=0.25)[0]
+    b = run("v5l", sun=0.3, days=40)[2]
+    assert np.array_equal(a.soc, b.soc)
+    c = run("v5l_c50", sun=3.0, days=40)[2]
+    assert c.ceiling.max() <= 0.5 + 1e-9
+    up = np.where(np.diff(c.soc) > 1e-9)[0]            # the battery is only ever charged up to the cap
+    assert c.soc[up + 1].max() <= 0.5 + 1e-9

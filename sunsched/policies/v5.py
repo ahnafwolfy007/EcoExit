@@ -13,7 +13,9 @@ two switches and one knob:
            and no break-even batch. A wake is bought at the last daylight
            chance before the oldest urgent frame expires, or earlier when the
            queue already fills what one wake may spend.
-  margin   The knob of the value-life front: charge kept above the hold level.
+  margin   Charge kept above the hold level.
+  cap      The knob of the value-life front: a charge ceiling that always applies
+           (the hold may go below it).
 """
 from typing import List
 
@@ -64,11 +66,11 @@ class SunSchedV5(SunSchedV4, _LateWakes):
     name = "sunsched5"
 
     def __init__(self, control_cfg, baseline_cfg, backoff: bool = True, late: bool = True, margin: float = 0.10,
-                 backoff_days: int = 14, two_tier: bool = True, reserve: str = "survive", al_min: float = 1.3,
+                 cap: float = 1.0, backoff_days: int = 14, two_tier: bool = True, reserve: str = "survive", al_min: float = 1.3,
                  name: str = None, **kw):
         super().__init__(control_cfg, baseline_cfg, two_tier=two_tier, reserve=reserve, al_min=al_min,
                          name=name or "sunsched5", hold_margin=margin, **kw)
-        self.backoff, self.late, self.backoff0 = backoff, late, int(backoff_days)
+        self.backoff, self.late, self.backoff0, self.cap = backoff, late, int(backoff_days), float(cap)
 
     def reset(self, ctx):
         super().reset(ctx)
@@ -76,6 +78,7 @@ class SunSchedV5(SunSchedV4, _LateWakes):
         self._hold_until = -1          # no hold before this day
         self._held_last = -10 ** 6     # last day a hold was on
         self._b = self.backoff0
+        self._ceiling = self.cap
 
     def _note_shortage(self, obs: Obs):
         """This slot cannot pay for a night capture and its triage."""
@@ -91,6 +94,7 @@ class SunSchedV5(SunSchedV4, _LateWakes):
 
     def _reservoir_hold(self, obs, judge=False, curtailed=False):
         super()._reservoir_hold(obs, judge, curtailed)
+        self._ceiling = min(self._ceiling, self.cap)
         if not self.backoff:
             return
         if self._short and obs.day - self._held_last <= 30:
@@ -99,7 +103,7 @@ class SunSchedV5(SunSchedV4, _LateWakes):
             self._held_last = -10 ** 6
         self._short = False
         if obs.day < self._hold_until and self._hold_on:
-            self._hold_on, self._ceiling = False, 1.0
+            self._hold_on, self._ceiling = False, self.cap
         if self._hold_on:
             self._held_last = obs.day
 
