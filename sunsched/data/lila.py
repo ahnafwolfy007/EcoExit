@@ -45,7 +45,7 @@ DATASETS = {
     "lila_wellington": r"wellington",
     "lila_idaho": r"idaho",
     "lila_nz": r"trail camera images of new zealand",
-    "lila_wcs": r"wcs",
+    "lila_wcs": r"wcs camera",
     "lila_safrica": r"snapshot (?:camdeboo|karoo|kgalagadi|kruger|mountain zebra)",
 }
 HUMAN = frozenset({"human", "person", "people", "humans", "homo sapiens"})
