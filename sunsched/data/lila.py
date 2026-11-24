@@ -4,13 +4,17 @@ Written before any image of these corpora was downloaded. Only counts from the
 metadata had been seen (WP1, sunsched/data/eligibility.py).
 
 Rules, fixed here:
+  people    Images of people and vehicles are removed first, in every corpus.
+            LILA withholds them (404) in most of these corpora but keeps their
+            rows, so a node would otherwise be asked about pictures that do not
+            exist. Eligibility and roles use the remaining images.
   cameras   eligible = at least 200 frames and 60 days between first and last
             capture inside the 365-day window with most captures, and 98% valid
             times. Roles by eligibility.split_cameras: 25 eval, 5 calib, rest
             train, balanced over activity tertiles in SHA-256 order.
   frames    eval and calib: every frame of the camera's window, the first 5,000
             in time order. No calendar years are stacked.
-  labels    empty, human, vehicle as such. Any other label with at least 50
+  labels    empty as such. Any other label with at least 50
             images among the chosen training images keeps its name, the others
             become "other_animal". Frames whose label says that nobody could
             tell (unknown, unidentifiable, problem ...) are dropped everywhere.
@@ -44,6 +48,7 @@ DATASETS = {
     "lila_nkhotakota": r"nkhotakota",
     "lila_wellington": r"wellington",
     "lila_idaho": r"idaho",
+    "lila_lynx": r"wsu lynx",
     "lila_nz": r"trail camera images of new zealand",
     "lila_wcs": r"wcs camera",
     "lila_safrica": r"snapshot (?:camdeboo|karoo|kgalagadi|kruger|mountain zebra)",
@@ -126,6 +131,8 @@ def window_frames(g: pd.DataFrame, cap: int = 5000) -> pd.DataFrame:
 
 
 def select(table: pd.DataFrame, cfg) -> Tuple[Dict[str, pd.DataFrame], List[str], dict]:
+    people = table.label.isin(("human", "vehicle"))
+    table = table[~people].reset_index(drop=True)
     known = table[table.label != "unknown"]
     r = roles(table)
     out = {}
@@ -154,11 +161,11 @@ def select(table: pd.DataFrame, cfg) -> Tuple[Dict[str, pd.DataFrame], List[str]
             break
     out["train"] = pool.loc[np.concatenate(take)].reset_index(drop=True)
     n = Counter(out["train"].label)
-    keep = {x for x, c in n.items() if c >= MIN_TRAIN or x in ("empty", "human", "vehicle")} | {"empty"}
+    keep = {x for x, c in n.items() if c >= MIN_TRAIN} | {"empty"}
     for k in out:
         out[k] = out[k].assign(label=out[k].label.where(out[k].label.isin(keep), "other_animal"))
     names = sorted(keep | {"other_animal"})
-    stats = dict(images=len(table), dropped_unknown=len(table) - len(known), cameras={k: len(v) for k, v in r.items()},
+    stats = dict(images=len(table), dropped_people=int(people.sum()), dropped_unknown=len(table) - len(known), cameras={k: len(v) for k, v in r.items()},
                  frames={k: len(v) for k, v in out.items()}, classes=len(names),
                  empty_eval=float((out["eval"].label == "empty").mean()))
     return out, names, stats

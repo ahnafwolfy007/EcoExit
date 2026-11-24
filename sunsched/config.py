@@ -273,6 +273,7 @@ SITES: Dict[str, Dict] = {
     "skukuza":    dict(lat=-24.99, lon=31.59, utc_offset=2, colocated=True),
     "nkhotakota": dict(lat=-12.90, lon=34.10, utc_offset=2, colocated=True),
     "idaho":      dict(lat=45.0, lon=-115.0, utc_offset=-7, colocated=True),
+    "washington": dict(lat=48.60, lon=-119.50, utc_offset=-8, colocated=True),
     "wellington": dict(lat=-41.29, lon=174.78, utc_offset=12, colocated=True),
 }
 
@@ -294,7 +295,7 @@ CORPORA: Dict[str, Dict] = {
     **{f"lila_{k}": dict(site=s, aspect=4 / 3, vehicle_classes=("human", "vehicle"),
                          splits=(("train",), "calib", "eval"), years=(2019, 2020, 2021, 2022, 2023))
        for k, s in (("swg", "annamites"), ("orinoquia", "meta"), ("ammonitor", "white_mtns"),
-                    ("nkhotakota", "nkhotakota"), ("wellington", "wellington"), ("idaho", "idaho"),
+                    ("nkhotakota", "nkhotakota"), ("wellington", "wellington"), ("idaho", "idaho"), ("lynx", "washington"),
                     ("nz", "wellington"), ("wcs", "meta"), ("safrica", "skukuza"))},
 }
 

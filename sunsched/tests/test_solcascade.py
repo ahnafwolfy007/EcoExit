@@ -360,7 +360,7 @@ def test_lila_selection_rules():
     rng = np.random.default_rng(5)
     rows = []
     for c in range(45):
-        for s in range(150):
+        for s in range(180):
             t = pd.Timestamp("2021-03-01") + pd.Timedelta(days=float(rng.uniform(0, 900)))
             lab = rng.choice(["Deer", "Fox", "Rare", "Empty", "Human", "Unidentifiable"], p=[.4, .2, .002, .3, .05, .048])
             for k in range(3):
@@ -370,13 +370,14 @@ def test_lila_selection_rules():
     raw = pd.DataFrame(rows)
     raw = pd.concat([raw, raw.iloc[:1].assign(original_label="Empty", common_name="empty")])   # a second label
     T = lila.finish_table(raw)
-    assert len(T) == 45 * 450 and T.image.is_unique
+    assert len(T) == 45 * 540 and T.image.is_unique
     cfg = Config()
     sel, names, st = lila.select(T, cfg)
     locs = {k: set(v.location) for k, v in sel.items()}
     assert len(locs["eval"]) == 25 and len(locs["calib"]) == 5
     assert not (locs["eval"] & locs["train"] or locs["eval"] & locs["calib"] or locs["calib"] & locs["train"])
-    assert "unknown" not in names and {"empty", "human", "other_animal", "deer", "fox"} <= set(names) and "rare" not in names
+    assert not {"unknown", "human"} & set(names) and {"empty", "other_animal", "deer", "fox"} <= set(names) and "rare" not in names
+    assert st["dropped_people"] > 0 and all("human" not in set(sel[k].label) for k in sel)
     for k in ("eval", "calib"):
         for _, g in sel[k].groupby("location"):
             assert g.t.max() - g.t.min() <= pd.Timedelta(days=365) and g.t.is_monotonic_increasing
