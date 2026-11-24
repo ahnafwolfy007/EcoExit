@@ -164,3 +164,53 @@ def test_camera_window_and_split():
     assert not (sets[0] & sets[1] or sets[0] & sets[2] or sets[1] & sets[2])
     assert (len(roles["eval"]), len(roles["calib"]), len(roles["train"])) == (25, 5, 20)
     assert E.camera_table(_meta(2, n=6000, days=300)).frames.max() == 5000
+
+
+def test_stabbing_is_the_minimum_number_of_wakes():
+    from itertools import combinations
+    from sunsched.eval.wakeshare import stabbing_wakes, wake_share
+    rng = np.random.default_rng(3)
+    for _ in range(60):
+        s = np.sort(rng.integers(0, 14, rng.integers(1, 7)))
+        D = int(rng.integers(1, 5))
+        points = range(0, 14 + D + 1)
+        best = next(k for k in range(1, len(s) + 1)
+                    if any(all(any(a <= p <= a + D for p in c) for a in s) for c in combinations(points, k)))
+        assert stabbing_wakes(s, D) == best
+    w = wake_share(np.array([0, 0, 1, 2, 1000]), 576, 12.0, 100.0)
+    assert (w["n_capture_slots"], w["n_stab"]) == (4, 2) and abs(w["wake_share"] - 0.24) < 1e-12
+
+
+def test_tier_training_and_distillation_run():
+    """The training loop with a tiny stand-in trunk (timm is not needed here)."""
+    import io
+    import torch
+    from PIL import Image
+    from sunsched.vision import tiers as TR
+
+    class Tiny(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.c, self.b = torch.nn.Conv2d(3, 8, 3, 2), torch.nn.BatchNorm2d(8)
+
+        def forward(self, x):
+            z = self.b(self.c(x))
+            return torch.cat([z.mean((2, 3)), z.amax((2, 3))], 1)
+
+    rng = np.random.default_rng(0)
+    y = rng.integers(0, 2, 64)
+    blobs = []
+    for k in y:
+        b = io.BytesIO()
+        Image.fromarray((rng.integers(0, 60, (40, 56, 3)) + 150 * k).astype(np.uint8)).save(b, "JPEG")
+        blobs.append(b.getvalue())
+    dev, rows = torch.device("cpu"), np.arange(64)
+    tr = Tiny()
+    bn = tr.b.running_mean.clone()
+    tr, hd = TR.finetune(tr, (32, 32), blobs, rows, y, 2, dev, epochs=4, batch=16, lr=1e-2, head_lr=1e-2, workers=0, log=lambda *_: 0)
+    X, Z = TR.extract(tr, hd, (32, 32), blobs, rows, dev, workers=0)
+    assert X.shape == (64, 16) and (Z.argmax(1) == y).mean() > 0.9 and torch.equal(bn, tr.b.running_mean)
+    s, h2 = TR.finetune(Tiny(), (16, 16), blobs, rows, y, 2, dev, epochs=4, batch=16, lr=1e-2, head_lr=1e-2, teacher=Z, workers=0, log=lambda *_: 0)
+    assert (TR.extract(s, h2, (16, 16), blobs, rows, dev, workers=0)[1].argmax(1) == y).mean() > 0.9
+    conv = torch.nn.Sequential(torch.nn.Conv2d(3, 4, 3, padding=1, bias=False))
+    assert TR.count_macs(conv, 8, 8) == 8 * 8 * 3 * 4 * 9

@@ -19,6 +19,7 @@ from sunsched.env.forecast import ReserveForecaster
 from sunsched.env.solar import (battery_temperature, dawn_dusk, harvest_j,
                                 irradiation_j_per_m2, load_year)
 from sunsched.eval.metrics import summarize
+from sunsched.eval.wakeshare import wake_share
 from sunsched.policies.base import RunContext
 from sunsched.policies.baselines import (AlwaysNow, ChargeCeilingEarlyExit, DeferCeiling,
                                          EnergyAwareEarlyExit, LazyDeferral, TriageOnly)
@@ -233,6 +234,7 @@ def run_job(job: dict) -> dict:
     if job.get("autonomy_days"):
         cfg.battery.capacity_wh = float(job["autonomy_days"]) * (demand / stream.n_days) / 3600.0
     area = panel_area_m2(ratio, demand, site, cfg.solar.years, window, world, cfg)
+    share = wake_share(stream.slot, int(round(cfg.control.deadline_h * 3600 / cfg.slot_seconds)), energy.wake_j, demand)
     harvest = harvest_j(irr, area, cfg.solar, cfg.slot_seconds)
     temp = battery_temperature(sy.air_temp_c[window], irr, cfg.solar.enclosure_gain_c,
                                cfg.solar.thermal_tau_hours, cfg.slot_seconds)
@@ -273,7 +275,7 @@ def run_job(job: dict) -> dict:
                 capacity_wh=cfg.battery.capacity_wh,
                 days_of_autonomy=cfg.battery.capacity_wh * 3600.0 / max(demand / stream.n_days, 1e-9),
                 sim_seconds=round(time.time() - t0, 2),
-                **{k: v for k, v in job.items() if k.startswith("tag_")}, **metrics)
+                **share, **{k: v for k, v in job.items() if k.startswith("tag_")}, **metrics)
 
 
 def _safe_run(job: dict) -> dict:
