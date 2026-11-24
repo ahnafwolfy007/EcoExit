@@ -75,6 +75,8 @@ V5_CAPS = {"v5l": 1.0, **{f"v5l_c{int(100 * c)}": c for c in (0.85, 0.7, 0.6, 0.
 # Third look: as v5l with the standard margin (0.10) and the buffer rule; (late, cap).
 V6_VARIANTS = {"v6": (True, 1.0), **{f"v6_c{int(100 * c)}": (True, c) for c in (0.85, 0.7, 0.6, 0.5, 0.4)},
                "v6_early": (False, 1.0), "v6_early_c50": (False, 0.5)}
+# Fourth look: v6 with the fallback to lazy deferral where a night does not fit; cap.
+V7_VARIANTS = {"v7": 1.0, **{f"v7_c{int(100 * c)}": c for c in (0.85, 0.7, 0.6, 0.5, 0.4)}}
 QTEST_FRONT = ["v6", "v6_c85", "v6_c70", "v6_c60", "v6_c50", "v6_c40"]   # frozen in PREREGISTRATION_v3.md
 LAZY_CEILINGS = {f"lazy_c{int(100 * c)}": c for c in (0.4, 0.5, 0.6, 0.7, 0.85)}
 
@@ -172,6 +174,9 @@ def make_policy(name: str, cfg: C.Config):
     if name in V6_VARIANTS:
         late, cap = V6_VARIANTS[name]
         return SunSchedV5(c, b, backoff=False, late=late, margin=0.10, cap=cap, buffer=True, name=name)
+    if name in V7_VARIANTS:
+        return SunSchedV5(c, b, backoff=False, late=True, margin=0.10, cap=V7_VARIANTS[name], buffer=True, fallback=True,
+                          name=name)
     if name in LAZY_CEILINGS:
         return LazyCeiling(b.lazy_theta, b.lazy_soc_on, b.lazy_soc_keep, interval, LAZY_CEILINGS[name], name)
     if name == "sunsched":

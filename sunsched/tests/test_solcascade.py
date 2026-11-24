@@ -423,3 +423,20 @@ def test_v5_buffer_never_reserves_more_and_off_is_unchanged():
     for x in (c, d):
         assert np.isfinite(x.soc).all() and x.soc.min() >= 0.0
     assert d.ceiling.max() <= 0.5 + 1e-9
+
+
+def test_v7_fallback_only_where_a_night_does_not_fit():
+    from sunsched.policies.base import Obs
+    from sunsched.tests.test_simulator import run
+    r, p, ctx = _v5(0.3, backoff=False, buffer=True, fallback=True)
+    assert np.array_equal(r.soc, run("v7", sun=0.3, days=40)[2].soc)
+    night = p._night_sleep_j()
+    p._ceiling = 1.0
+    for cap, small in ((night * 1.5, True), (night * 20, False)):
+        o = Obs(capacity_j=cap, floor_j=0.05 * cap)
+        assert p._small(o) is small and p._buffer_j(o) <= 0.5 * cap
+    q = _v5(0.3, backoff=False, buffer=True)[1]
+    assert not q._small(Obs(capacity_j=night, floor_j=0.05 * night))
+    for f in ("v7", "v7_c50"):
+        x = run(f, sun=0.1, days=60)[2]
+        assert np.all(x.final_slot >= x.capture_slot)

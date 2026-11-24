@@ -335,6 +335,14 @@ def v6screen(cfg):
     return [dict(j, warmup_days=365) for j in jobs if int(j["year"]) in V4_SCREEN_YEARS]
 
 
+def v7screen(cfg):
+    """The fallback rule, on the cells and years of v5screen."""
+    from sunsched.experiment import V7_VARIANTS
+    cells = [(a, r) for a in (0.5, 1, 2, 5, 10, 30, 100) for r in (1.0, 1.5, 2.0)]
+    jobs = cell_jobs(cfg, list(V7_VARIANTS), cells, tags=dict(group="v7screen"))
+    return [dict(j, warmup_days=365) for j in jobs if int(j["year"]) in V4_SCREEN_YEARS]
+
+
 QTEST_CELLS = [(a, r) for a in (0.5, 1, 2) for r in (1.0, 1.5, 2.0)] +               [(a, r) for a in (5, 10) for r in (1.0, 1.5, 2.0)] + [(a, r) for a in (30, 100) for r in (1.5, 2.0)]
 QTEST_YEARS = (2019, 2021, 2023)
 
@@ -368,7 +376,7 @@ def qsmoke(cfg):
     return [j for j in jobs if j["location"] in keep]
 
 
-GROUPS = dict(qnode=qnode, qsmoke=qsmoke, qtest=qtest, v6screen=v6screen, v5capscreen=v5capscreen, v5screen=v5screen, v4screen=v4screen, coverage=coverage, grid=grid, sens=sens, wake=wake, latency=latency, sites=sites,
+GROUPS = dict(v7screen=v7screen, qnode=qnode, qsmoke=qsmoke, qtest=qtest, v6screen=v6screen, v5capscreen=v5capscreen, v5screen=v5screen, v4screen=v4screen, coverage=coverage, grid=grid, sens=sens, wake=wake, latency=latency, sites=sites,
               prereg=prereg, v3grid=v3grid, v3wake=v3wake, v3grid2=v3grid2, v3grid4=v3grid4, v3wake4=v3wake4,
               prereg2=prereg2, wake2=wake2, v3grid5=v3grid5, v3ref5=v3ref5, base5reg=base5reg,
               base5new=base5new, v3wake5=v3wake5, v3frozen=v3frozen)

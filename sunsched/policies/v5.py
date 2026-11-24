@@ -1,7 +1,7 @@
 """SunSched v5 candidates (PLAN_V2 section 3). Development only.
 
 v5 is the full v4 (two-tier queue, survival reserve, array-to-load guard) with
-three switches and two knobs:
+four switches and two knobs:
 
   backoff  Fault it answers: on Serengeti S10 the hold lowers the ceiling, a
            burst of activity empties the battery, and captures are lost (11 %
@@ -19,6 +19,13 @@ three switches and two knobs:
            against lazy deferral's +0.103 at a cap of 0.5). Rule: the energy
            kept at sunset is never more than the fixed buffer of lazy deferral,
            taken as the same share of the range between floor and ceiling.
+  fallback Fault it answers: with the buffer rule S10 still loses 0.04 value to
+           lazy deferral at low caps and small storage, because daylight
+           spending also reserves the sleep energy until sunset, which the sun
+           pays anyway. Rule: while the night's sleep energy does not fit into
+           the buffer, uncertain frames are refined by the rule of lazy deferral
+           (daylight, charge above its switch-on level, its buffer kept), with
+           levels relative to the ceiling in force.
   margin   Charge kept above the hold level.
   cap      The knob of the value-life front: a charge ceiling that always applies
            (the hold may go below it).
@@ -38,6 +45,8 @@ class _LateWakes(SunSchedV3):
     late = True
 
     def refine_batch(self, obs: Obs, items: List[QItem]) -> List[QItem]:
+        if self._small(obs):
+            return self._lazy_batch(obs, items)
         if not self.late:
             return super().refine_batch(obs, items)
         e = self.ctx.energy
@@ -57,6 +66,23 @@ class _LateWakes(SunSchedV3):
             return []
         return items[:min(n_afford, self.c.max_batch)]
 
+    def _small(self, obs: Obs) -> bool:
+        return False
+
+    def _lazy_batch(self, obs: Obs, items: List[QItem]) -> List[QItem]:
+        """LazyDeferral's rule, with its two levels taken relative to the ceiling in force."""
+        level = min(self._ceiling, 1.0)
+        if obs.night or obs.soc < self.soc_on * level:
+            return []
+        if not (obs.t % self._interval == 0 or obs.curtail_hint_j > 0 or obs.b_will_wake):
+            return []
+        e = self.ctx.energy
+        usable = (obs.energy_j - self.soc_keep * level * obs.capacity_j) * self.ctx.cfg.battery.eta_discharge
+        if not obs.b_will_wake:
+            usable -= e.wake_j
+        n = int(max(0.0, usable) // e.refine_j[self.refine_op])
+        return sorted(items, key=lambda it: it.t)[:min(n, self.c.max_batch)]
+
     def _refused_today(self, obs: Obs) -> float:
         """Load-side energy that the forecast says today's sun will offer beyond the level in force."""
         if obs.night:
@@ -72,12 +98,13 @@ class SunSchedV5(SunSchedV4, _LateWakes):
     name = "sunsched5"
 
     def __init__(self, control_cfg, baseline_cfg, backoff: bool = True, late: bool = True, margin: float = 0.10,
-                 cap: float = 1.0, buffer: bool = False, backoff_days: int = 14, two_tier: bool = True, reserve: str = "survive", al_min: float = 1.3,
+                 cap: float = 1.0, buffer: bool = False, fallback: bool = False, backoff_days: int = 14, two_tier: bool = True, reserve: str = "survive", al_min: float = 1.3,
                  name: str = None, **kw):
         super().__init__(control_cfg, baseline_cfg, two_tier=two_tier, reserve=reserve, al_min=al_min,
                          name=name or "sunsched5", hold_margin=margin, **kw)
         self.backoff, self.late, self.backoff0, self.cap = backoff, late, int(backoff_days), float(cap)
-        self.buffer = bool(buffer)
+        self.buffer, self.fallback = bool(buffer), bool(fallback)
+        self.soc_on = baseline_cfg.lazy_soc_on
 
     def reset(self, ctx):
         super().reset(ctx)
@@ -87,14 +114,23 @@ class SunSchedV5(SunSchedV4, _LateWakes):
         self._b = self.backoff0
         self._ceiling = self.cap
 
+    def _buffer_j(self, obs: Obs) -> float:
+        """Lazy deferral's buffer as a share of the range between floor and ceiling (J above the floor)."""
+        floor = obs.floor_j / obs.capacity_j
+        share = (self.soc_keep - floor) / (1.0 - floor)
+        return share * max(min(self._ceiling, 1.0) - floor, 0.0) * obs.capacity_j
+
+    def _night_sleep_j(self) -> float:
+        return 1.2 * 0.5 * self.ctx.slots_per_day * self.ctx.energy.sleep_j / self.ctx.cfg.battery.eta_discharge
+
+    def _small(self, obs: Obs) -> bool:
+        return self.fallback and self._bound is not None and self._night_sleep_j() > self._buffer_j(obs)
+
     def target_j(self, obs: Obs) -> float:
         t = super().target_j(obs)
         if not self.buffer or self._bound is None:
             return t
-        floor = obs.floor_j / obs.capacity_j
-        share = (self.soc_keep - floor) / (1.0 - floor)
-        level = min(self._ceiling, 1.0)
-        return min(t, obs.floor_j + share * max(level - floor, 0.0) * obs.capacity_j)
+        return min(t, obs.floor_j + self._buffer_j(obs))
 
     def _note_shortage(self, obs: Obs):
         """This slot cannot pay for a night capture and its triage."""
