@@ -271,3 +271,20 @@ def test_context_head_starts_as_plain_head_and_learns_from_memory():
         m = C.train_context(X[:900], y[:900], cams[:900], t[:900], order[:900], v, 2, epochs=20)
         acc[v] = (C.predict(m, X[900:], cams[900:], t[900:], order[900:], *C.VARIANTS[v]).argmax(1) == y[900:]).mean()
     assert acc["causal"] < 0.62 and acc["bi"] > 0.75, acc
+
+
+def test_context_memory_availability_and_separate_memory_feature():
+    from sunsched.vision import context as C
+    rng = np.random.default_rng(2)
+    n = 200
+    t, cams, order = np.arange(n) * 300.0, np.zeros(n).astype(str), np.arange(n)
+    avail = rng.random(n) < 0.4
+    idx, mask = C.build_index(cams, t, order, *C.VARIANTS["causal_burst"], avail=avail)
+    assert mask.any() and avail[idx[mask]].all()
+    y = rng.integers(0, 2, n)
+    X, M = rng.normal(size=(n, 12)).astype(np.float32), rng.normal(size=(n, 5)).astype(np.float32)
+    m = C.train_context(X, y, cams, t, order, "causal_burst", 2, epochs=1, M=M)
+    assert C.predict(m, X, cams, t, order, *C.VARIANTS["causal_burst"], M=M).shape == (n, 2)
+    none = C.predict(m, X, cams, t, order, *C.VARIANTS["causal_burst"], M=M, avail=np.zeros(n, bool))
+    off = C.predict(m, X, cams, t, order, 0, 0, M=M)
+    assert np.allclose(none, off)                 # an empty memory is the plain head

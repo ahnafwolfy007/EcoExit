@@ -141,9 +141,39 @@ def per_camera(pred, y, val, cams):
     return rows
 
 
+def gate2(args, cfg, names, full, tri, tr, ev, y, cams, t, order, val, dev):
+    """Past memory plus a one-minute burst wait, with realistic memory contents.
+
+    A deferring node holds full features only of the frames it refined, so
+    memory made of full features is re-tested with 70, 40 and 20 % of frames
+    available (random whole bursts, fixed seed). Memory made of triage features
+    exists for every captured frame and is the alternative."""
+    rows = []
+    past, fut = C.VARIANTS["causal_burst"]
+    burst = np.char.add(cams.astype(str), (t // C.BURST_S).astype(np.int64).astype(str))
+    _, b = np.unique(burst, return_inverse=True)
+    u = np.random.default_rng(0).random(b.max() + 1)[b]
+    for seed in range(args.seeds):
+        for mem, M, variant in (("none", None, "none"), ("full", None, "causal_burst"),
+                                ("triage", tri, "causal_burst")):
+            model = C.train_context(full[tr], y[tr], cams[tr], t[tr], order[tr], variant, len(names), seed=seed,
+                                    device=dev, M=None if M is None else M[tr])
+            for frac in ([1.0, 0.7, 0.4, 0.2, 0.0] if mem == "full" else [1.0]):
+                p_, f_ = C.VARIANTS["none"] if mem == "none" else (past, fut)
+                pred = C.predict(model, full[ev], cams[ev], t[ev], order[ev], p_, f_, device=dev,
+                                 M=None if M is None else M[ev], avail=(u < frac)[ev]).argmax(1)
+                pc = per_camera(pred, y[ev], val[ev], cams[ev])
+                rows += [dict(corpus=cfg.data.corpus, memory=mem, available=frac, seed=seed, camera=c, n=n,
+                              acc=a, value=vs) for c, n, a, vs in pc]
+                print(f"  seed {seed} memory {mem:<6} available {frac:.1f}: camera value "
+                      f"{np.mean([x[3] for x in pc]):.3f}", flush=True)
+        write_csv(f"{cfg.results_dir}/tables/context_gate2.csv", rows)
+
+
 def main():
     ap = base_parser(__doc__)
     ap.add_argument("--seeds", type=int, default=3)
+    ap.add_argument("--gate2", action="store_true", help="fine-tuned trunk only; what may the memory hold?")
     ap.add_argument("--ft-epochs", type=int, default=8)
     args = ap.parse_args()
     cfg = load_cfg(args)
@@ -180,12 +210,15 @@ def main():
     rows, summary = [], []
     tr, ev = idx["train"], idx["eval"]
     allrows = np.arange(len(recs))
-    for trunk_kind in ("frozen", "finetuned"):
+    for trunk_kind in (("finetuned",) if args.gate2 else ("frozen", "finetuned")):
         banner(f"2. trunk: {trunk_kind}")
         trunk = load_trunk(v.backbone).to(dev)
         if trunk_kind == "finetuned":
             finetune(trunk, v.taps, blobs, tr, y, len(names), small, dev, args.ft_epochs)
         full, tri = extract(trunk, v.taps, blobs, allrows, small, dev)
+        if args.gate2:
+            gate2(args, cfg, names, full, tri, tr, ev, y, cams, t, order, val, dev)
+            return
         for op, X in (("triage", tri), ("full", full)):
             variants = ["none"] if op == "triage" else list(C.VARIANTS)
             for variant in variants:
