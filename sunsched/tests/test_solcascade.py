@@ -407,4 +407,4 @@ def test_v5_cap_limits_charge_and_cap_one_changes_nothing():
     c = run("v5l_c50", sun=3.0, days=40)[2]
     assert c.ceiling.max() <= 0.5 + 1e-9
     up = np.where(np.diff(c.soc) > 1e-9)[0]            # the battery is only ever charged up to the cap
-    assert c.soc[up + 1].max() <= 0.5 + 1e-9
+    assert not len(up) or c.soc[up + 1].max() <= 0.5 + 1e-9
