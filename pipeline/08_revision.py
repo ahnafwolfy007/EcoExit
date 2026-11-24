@@ -310,7 +310,16 @@ def v4screen(cfg):
     return [j for j in cells_jobs if int(j["year"]) in V4_SCREEN_YEARS]
 
 
-GROUPS = dict(v4screen=v4screen, coverage=coverage, grid=grid, sens=sens, wake=wake, latency=latency, sites=sites,
+def v5screen(cfg):
+    """PLAN_V2 gate D6 (first look, frozen-trunk outcomes): one warm-up year, two weather years."""
+    from sunsched.experiment import LAZY_CEILINGS, V5_POLICIES
+    pol = ["always_now", "lazy_defer", "sunsched3_no_hold", "v4_full_surv"] + V5_POLICIES + list(LAZY_CEILINGS)
+    cells = [(a, r) for a in (0.5, 1, 2, 5, 10, 30, 100) for r in (1.0, 1.5, 2.0)]
+    jobs = cell_jobs(cfg, pol, cells, tags=dict(group="v5screen"))
+    return [dict(j, warmup_days=365) for j in jobs if int(j["year"]) in V4_SCREEN_YEARS]
+
+
+GROUPS = dict(v5screen=v5screen, v4screen=v4screen, coverage=coverage, grid=grid, sens=sens, wake=wake, latency=latency, sites=sites,
               prereg=prereg, v3grid=v3grid, v3wake=v3wake, v3grid2=v3grid2, v3grid4=v3grid4, v3wake4=v3wake4,
               prereg2=prereg2, wake2=wake2, v3grid5=v3grid5, v3ref5=v3ref5, base5reg=base5reg,
               base5new=base5new, v3wake5=v3wake5, v3frozen=v3frozen)

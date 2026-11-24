@@ -26,6 +26,7 @@ from sunsched.policies.baselines import (AlwaysNow, ChargeCeilingEarlyExit, Defe
 from sunsched.policies.ours import SunSched
 from sunsched.policies.v3 import SunSchedV3
 from sunsched.policies.v4 import SunSchedV4
+from sunsched.policies.v5 import LazyCeiling, SunSchedV5
 from sunsched.sim.node import build_node_energy
 from sunsched.sim.outcomes import load_outcomes
 from sunsched.sim.warmup import extend, scored_part
@@ -57,6 +58,19 @@ V4_VARIANTS = {
     "v4_full_conf": (True, "conformal", 1.3),
 }
 V4_POLICIES = list(V4_VARIANTS)
+
+# SunSched v5 candidates: (backoff, late wakes, hold margin); None = hold off.
+V5_VARIANTS = {
+    "v5": (True, True, 0.10),
+    "v5_back": (True, False, 0.10),
+    "v5_late": (False, True, 0.10),
+    "v5_m00": (True, True, 0.00),
+    "v5_m25": (True, True, 0.25),
+    "v5_m50": (True, True, 0.50),
+    "v5_nohold": (True, True, None),
+}
+V5_POLICIES = list(V5_VARIANTS)
+LAZY_CEILINGS = {f"lazy_c{int(100 * c)}": c for c in (0.4, 0.5, 0.6, 0.7, 0.85)}
 
 
 # -- config (de)serialisation, so worker processes rebuild the exact config ----
@@ -143,6 +157,12 @@ def make_policy(name: str, cfg: C.Config):
     if name in V4_VARIANTS:
         tier, reserve, al = V4_VARIANTS[name]
         return SunSchedV4(c, b, two_tier=tier, reserve=reserve, al_min=al, name=name)
+    if name in V5_VARIANTS:
+        back, late, margin = V5_VARIANTS[name]
+        return SunSchedV5(c, b, backoff=back, late=late, margin=0.1 if margin is None else margin,
+                          hold=margin is not None, name=name)
+    if name in LAZY_CEILINGS:
+        return LazyCeiling(b.lazy_theta, b.lazy_soc_on, b.lazy_soc_keep, interval, LAZY_CEILINGS[name], name)
     if name == "sunsched":
         return SunSched(c)
     if name == "sunsched_no_defer":

@@ -214,3 +214,82 @@ def test_tier_training_and_distillation_run():
     assert (TR.extract(s, h2, (16, 16), blobs, rows, dev, workers=0)[1].argmax(1) == y).mean() > 0.9
     conv = torch.nn.Sequential(torch.nn.Conv2d(3, 4, 3, padding=1, bias=False))
     assert TR.count_macs(conv, 8, 8) == 8 * 8 * 3 * 4 * 9
+
+
+def _v5(sun=0.05, days=40, **sw):
+    """One v5 run on the synthetic world; returns (result, policy)."""
+    from sunsched.env.forecast import ReserveForecaster
+    from sunsched.env.solar import dawn_dusk
+    from sunsched.policies.v5 import SunSchedV5
+    cfg, oc, energy, slots, harvest, temp, night, elev, n = TS.world(sun=sun, days=days)
+    pol = SunSchedV5(cfg.control, cfg.baselines, **sw)
+    fc = ReserveForecaster(n, int(36 * 3600 / cfg.slot_seconds), cfg.control.alpha, cfg.control.aci_gamma, 30,
+                           cfg.battery.eta_charge, cfg.battery.eta_discharge)
+    sr, ss = dawn_dusk(elev, cfg.slots_per_day)
+    ctx = RunContext(cfg=cfg, energy=energy, forecaster=fc, slots_per_day=cfg.slots_per_day,
+                     slot_seconds=cfg.slot_seconds,
+                     deadline_slots=int(cfg.control.deadline_h * 3600 / cfg.slot_seconds),
+                     sunrise=sr, sunset=ss, n_slots=n)
+    return simulate(ctx, pol, np.arange(len(slots)), slots, oc, harvest, temp, night), pol, ctx
+
+
+def test_v5_reduces_to_v4_when_switched_off():
+    from sunsched.tests.test_simulator import run
+    for sun in (0.05, 0.3):
+        a = run("v4_full_surv", sun=sun, days=40)[2]
+        b = _v5(sun, backoff=False, late=False)[0]
+        assert np.array_equal(a.soc, b.soc) and np.array_equal(a.final_label, b.final_label)
+
+
+def test_v5_respects_deadlines_and_late_saves_wakes():
+    for sun in (0.05, 0.3, 2.0):
+        r, _, ctx = _v5(sun)
+        later = r.route == 3
+        assert np.all((r.final_slot - r.capture_slot)[later] <= ctx.deadline_slots) and np.all(r.final_slot >= r.capture_slot)
+    assert _v5(0.3, late=True)[0].b_wakes <= _v5(0.3, late=False)[0].b_wakes
+
+
+def test_v5_backoff_releases_and_doubles():
+    from types import SimpleNamespace as NS
+    _, pol, _ = _v5(0.3, days=10)
+    pol._hold_on, pol._ceiling, pol._held_last, pol._short, pol._b, pol._hold_until = True, 0.5, 20, True, 14, -1
+    import sunsched.policies.v4 as v4
+    orig = v4.SunSchedV4._reservoir_hold
+    v4.SunSchedV4._reservoir_hold = lambda self, obs, judge=False, curtailed=False: setattr(self, "_hold_on", True)
+    try:
+        pol._reservoir_hold(NS(day=21))
+        assert not pol._hold_on and pol._ceiling == 1.0 and pol._hold_until == 35 and pol._b == 28
+        pol._reservoir_hold(NS(day=34))
+        assert not pol._hold_on
+        pol._reservoir_hold(NS(day=35))
+        assert pol._hold_on
+        pol._short = True
+        pol._reservoir_hold(NS(day=36))
+        assert pol._hold_until == 64 and pol._b == 56
+        pol._short = True                              # a shortage with no recent hold is not the hold's fault
+        pol._reservoir_hold(NS(day=50))
+        assert pol._hold_until == 64
+    finally:
+        v4.SunSchedV4._reservoir_hold = orig
+
+
+def test_lazy_ceiling_and_new_policies_run():
+    from sunsched.experiment import LAZY_CEILINGS, V5_POLICIES
+    from sunsched.tests.test_simulator import run
+    for p in V5_POLICIES + list(LAZY_CEILINGS):
+        r = run(p, sun=0.3, days=12)[2]
+        assert np.all(r.final_slot >= 0), p
+    assert run("lazy_c50", sun=3.0)[2].soc[2000:].max() <= 0.8 + 1e-9
+
+
+def test_hypervolume():
+    from sunsched.eval.pareto import front, hypervolume
+    assert hypervolume([(1, 1)]) == 1 and hypervolume([]) == 0
+    assert abs(hypervolume([(0.5, 1.0), (1.0, 0.5)]) - 0.75) < 1e-12
+    assert hypervolume([(0.5, 1.0), (1.0, 0.5), (0.4, 0.4)]) == hypervolume([(0.5, 1.0), (1.0, 0.5)])
+    assert front([(1, 1), (1, 0.5), (0.5, 1)]) == [(1, 1)]
+    rng = np.random.default_rng(0)
+    p = rng.random((30, 2))
+    g = (np.stack(np.meshgrid(*[(np.arange(400) + .5) / 400] * 2), -1)).reshape(-1, 2)
+    mc = np.mean([(p >= q).all(1).any() for q in g])
+    assert abs(hypervolume(p) - mc) < 0.01
