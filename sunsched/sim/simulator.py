@@ -44,7 +44,9 @@ class SimResult:
 
 
 def simulate(ctx: RunContext, policy: Policy, frames: np.ndarray, frame_slots: np.ndarray,
-             outcomes, harvest_j: np.ndarray, temp_c: np.ndarray, night: np.ndarray) -> SimResult:
+             outcomes, harvest_j: np.ndarray, temp_c: np.ndarray, night: np.ndarray,
+             score_from: int = 0) -> SimResult:
+    """`score_from`: energy and wake counters restart at this slot (warm-up before it)."""
     cfg = ctx.cfg
     en = ctx.energy
     n = ctx.n_slots
@@ -84,6 +86,9 @@ def simulate(ctx: RunContext, policy: Policy, frames: np.ndarray, frame_slots: n
         final_slot[pos] = t
 
     for t in range(n):
+        if t == score_from:
+            harvested = consumed = curtailed = 0.0
+            b_wakes = dead = deferred = 0
         h = float(harvest_j[t])
         is_night = bool(night[t])
         obs.t, obs.day = t, t // spd

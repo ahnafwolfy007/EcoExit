@@ -172,6 +172,9 @@ class AgingCfg:
     # (env/battery.py:aging_variants). Empty = off, as in the first runs.
     variant_k_sigmas: Tuple[float, ...] = ()
     variant_k_Ts: Tuple[float, ...] = ()
+    # SolCascade: also score each trace under these chemistries ("lmo", "lfp",
+    # "nmc"; env/chemistry.py). Empty = off, as in all earlier runs.
+    chemistries: Tuple[str, ...] = ()
 
 
 @dataclass
@@ -260,6 +263,12 @@ SITES: Dict[str, Dict] = {
     "bergen":     dict(lat=60.39, lon=5.32, utc_offset=1, colocated=False),
     # Snapshot Serengeti grid, central Serengeti National Park, Tanzania.
     "serengeti":  dict(lat=-2.33, lon=34.83, utc_offset=3, colocated=True),
+    # SolCascade climates C1-C5 (C6 is bergen). Region-level coordinates.
+    "annamites":  dict(lat=16.20, lon=107.60, utc_offset=7, colocated=True),
+    "meta":       dict(lat=4.15, lon=-73.63, utc_offset=-5, colocated=True),
+    "white_mtns": dict(lat=44.05, lon=-71.30, utc_offset=-5, colocated=True),
+    "skukuza":    dict(lat=-24.99, lon=31.59, utc_offset=2, colocated=True),
+    "wellington": dict(lat=-41.29, lon=174.78, utc_offset=12, colocated=True),
 }
 
 # Per-corpus settings, copied into a Config by `apply_corpus`.

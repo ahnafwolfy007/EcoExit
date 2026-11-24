@@ -47,7 +47,7 @@ def panel_orientation(lat: float) -> Tuple[int, int]:
 
 
 def fetch_pvgis(lat: float, lon: float, start: int, end: int, cache_dir: str,
-                timeout: int = 120, force: bool = False) -> dict:
+                timeout: int = 120, force: bool = False, endpoints=None) -> dict:
     """Hourly PVGIS series for [start, end], cached as JSON.
 
     Tries the default radiation database first and falls back to ERA5, which
@@ -68,7 +68,7 @@ def fetch_pvgis(lat: float, lon: float, start: int, end: int, cache_dir: str,
                 angle=tilt, aspect=aspect, outputformat="json")
     errors = []
     for extra in ({}, {"raddatabase": "PVGIS-ERA5"}):
-        for endpoint in PVGIS_ENDPOINTS:
+        for endpoint in (endpoints or PVGIS_ENDPOINTS):
             url = endpoint + "?" + urllib.parse.urlencode({**base, **extra})
             try:
                 req = urllib.request.Request(url, headers={"User-Agent": "SunSched/2.0"})

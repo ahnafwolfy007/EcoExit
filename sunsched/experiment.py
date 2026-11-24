@@ -27,6 +27,7 @@ from sunsched.policies.v3 import SunSchedV3
 from sunsched.policies.v4 import SunSchedV4
 from sunsched.sim.node import build_node_energy
 from sunsched.sim.outcomes import load_outcomes
+from sunsched.sim.warmup import extend, scored_part
 from sunsched.sim.simulator import simulate
 
 BASELINES = ["always_now", "triage_only", "ee_now", "lazy_defer", "ceiling_now"]
@@ -237,9 +238,17 @@ def run_job(job: dict) -> dict:
                                cfg.solar.thermal_tau_hours, cfg.slot_seconds)
     sunrise, sunset = dawn_dusk(elev, spd)
 
+    frame_idx, slots, w = stream.frame_idx, stream.slot, int(job.get("warmup_days") or 0) * spd
+    n_warm = 0
+    if w:
+        x = extend(harvest, temp, night, elev, frame_idx, slots, w)
+        harvest, temp, night, elev = x["harvest"], x["temp"], x["night"], x["elev"]
+        frame_idx, slots, n_warm = x["frame_idx"], x["slots"], x["n_warm_frames"]
+        sunrise, sunset = dawn_dusk(elev, spd)
+
     policy = make_policy(job["policy"], cfg)
     forecaster = ReserveForecaster(
-        n_slots=n, horizon_slots=int(round(cfg.control.reserve_horizon_h * 3600 / cfg.slot_seconds)),
+        n_slots=n + w, horizon_slots=int(round(cfg.control.reserve_horizon_h * 3600 / cfg.slot_seconds)),
         alpha=cfg.control.alpha, gamma=cfg.control.aci_gamma,
         window_days=cfg.control.reserve_window_days,
         eta_charge=cfg.battery.eta_charge, eta_discharge=cfg.battery.eta_discharge,
@@ -248,11 +257,16 @@ def run_job(job: dict) -> dict:
     ctx = RunContext(cfg=cfg, energy=energy, forecaster=forecaster, slots_per_day=spd,
                      slot_seconds=cfg.slot_seconds,
                      deadline_slots=int(round(cfg.control.deadline_h * 3600 / cfg.slot_seconds)),
-                     sunrise=sunrise, sunset=sunset, n_slots=n)
+                     sunrise=sunrise, sunset=sunset, n_slots=n + w)
 
     t0 = time.time()
-    res = simulate(ctx, policy, stream.frame_idx, stream.slot, outcomes, harvest, temp, night)
+    res = simulate(ctx, policy, frame_idx, slots, outcomes, harvest, temp, night, score_from=w)
+    soc_start = float(res.soc[w - 1]) if w else cfg.battery.soc_init
+    if w:
+        res = scored_part(res, w, n_warm)
     metrics = summarize(res, outcomes, cfg, stream.n_days)
+    if w:
+        metrics.update(warmup_days=w // spd, soc_start=soc_start, soc_end=float(res.soc[-1]))
     return dict(policy=job["policy"], location=job["location"], site=site, year=year,
                 ratio=ratio, solar_source=sy.source, days=stream.n_days,
                 panel_area_cm2=area * 1e4, demand_always_now_kj=demand / 1e3,

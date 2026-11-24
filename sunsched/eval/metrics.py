@@ -10,6 +10,7 @@ from typing import Dict
 import numpy as np
 
 from sunsched.env.battery import aging_summary, aging_variants
+from sunsched.env.chemistry import chemistry_lives
 from sunsched.sim.simulator import (DROPPED, REFINED_LATER, REFINED_NOW, TRIAGE,
                                     UNCLASSIFIED, SimResult)
 
@@ -103,6 +104,8 @@ def energy_battery_metrics(res: SimResult, cfg, days: float) -> Dict[str, float]
         reserve_coverage=(float("nan") if res.reserve_coverage is None else res.reserve_coverage),
         **ageing,
         **variants,
+        **chemistry_lives(soc, res.temp_c, cfg.slot_seconds, days, cfg.aging, cfg.battery.capacity_wh,
+                          tuple(getattr(cfg.aging, "chemistries", ()) or ())),
         **(getattr(res, "reserve_shadow", None) or {}),
     )
 
