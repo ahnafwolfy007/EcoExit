@@ -1,7 +1,7 @@
 """SunSched v5 candidates (PLAN_V2 section 3). Development only.
 
 v5 is the full v4 (two-tier queue, survival reserve, array-to-load guard) with
-two switches and one knob:
+three switches and two knobs:
 
   backoff  Fault it answers: on Serengeti S10 the hold lowers the ceiling, a
            burst of activity empties the battery, and captures are lost (11 %
@@ -13,6 +13,12 @@ two switches and one knob:
            and no break-even batch. A wake is bought at the last daylight
            chance before the oldest urgent frame expires, or earlier when the
            queue already fills what one wake may spend.
+  buffer   Fault it answers: at 0.5 to 2 days of storage, and under any low cap,
+           the night reserve is as large as what the battery may hold, so
+           nothing is left to spend and deferred frames expire (S10: +0.055
+           against lazy deferral's +0.103 at a cap of 0.5). Rule: the energy
+           kept at sunset is never more than the fixed buffer of lazy deferral,
+           taken as the same share of the range between floor and ceiling.
   margin   Charge kept above the hold level.
   cap      The knob of the value-life front: a charge ceiling that always applies
            (the hold may go below it).
@@ -66,11 +72,12 @@ class SunSchedV5(SunSchedV4, _LateWakes):
     name = "sunsched5"
 
     def __init__(self, control_cfg, baseline_cfg, backoff: bool = True, late: bool = True, margin: float = 0.10,
-                 cap: float = 1.0, backoff_days: int = 14, two_tier: bool = True, reserve: str = "survive", al_min: float = 1.3,
+                 cap: float = 1.0, buffer: bool = False, backoff_days: int = 14, two_tier: bool = True, reserve: str = "survive", al_min: float = 1.3,
                  name: str = None, **kw):
         super().__init__(control_cfg, baseline_cfg, two_tier=two_tier, reserve=reserve, al_min=al_min,
                          name=name or "sunsched5", hold_margin=margin, **kw)
         self.backoff, self.late, self.backoff0, self.cap = backoff, late, int(backoff_days), float(cap)
+        self.buffer = bool(buffer)
 
     def reset(self, ctx):
         super().reset(ctx)
@@ -79,6 +86,15 @@ class SunSchedV5(SunSchedV4, _LateWakes):
         self._held_last = -10 ** 6     # last day a hold was on
         self._b = self.backoff0
         self._ceiling = self.cap
+
+    def target_j(self, obs: Obs) -> float:
+        t = super().target_j(obs)
+        if not self.buffer or self._bound is None:
+            return t
+        floor = obs.floor_j / obs.capacity_j
+        share = (self.soc_keep - floor) / (1.0 - floor)
+        level = min(self._ceiling, 1.0)
+        return min(t, obs.floor_j + share * max(level - floor, 0.0) * obs.capacity_j)
 
     def _note_shortage(self, obs: Obs):
         """This slot cannot pay for a night capture and its triage."""

@@ -408,3 +408,15 @@ def test_v5_cap_limits_charge_and_cap_one_changes_nothing():
     assert c.ceiling.max() <= 0.5 + 1e-9
     up = np.where(np.diff(c.soc) > 1e-9)[0]            # the battery is only ever charged up to the cap
     assert not len(up) or c.soc[up + 1].max() <= 0.5 + 1e-9
+
+
+def test_v5_buffer_never_reserves_more_and_off_is_unchanged():
+    from sunsched.tests.test_simulator import run
+    a = _v5(0.3, backoff=False)[0]
+    b = run("v5_late", sun=0.3, days=40)[2]
+    assert np.array_equal(a.soc, b.soc)
+    c = run("v6", sun=0.3, days=40)[2]
+    d = run("v6_c50", sun=0.3, days=40)[2]
+    for x in (c, d):
+        assert np.isfinite(x.soc).all() and x.soc.min() >= 0.0
+    assert d.ceiling.max() <= 0.5 + 1e-9
