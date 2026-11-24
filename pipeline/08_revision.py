@@ -347,6 +347,20 @@ def qtest(cfg):
     return [dict(j, warmup_days=365) for j in jobs if int(j["year"]) in QTEST_YEARS]
 
 
+QNODE = (("wake3", "node.tier_b_wake_j", 3.0), ("wake35", "node.tier_b_wake_j", 35.0),
+         ("sleep05", "node.p_sleep_w", 0.0005), ("deadline12", "control.deadline_h", 12.0))
+
+
+def qnode(cfg):
+    """Other nodes and another deadline: does W, recomputed for each, still predict the gain?"""
+    year = 2021 if cfg.data.corpus.startswith("lila_") else 2013
+    jobs = []
+    for name, field, value in QNODE:
+        jobs += cell_jobs(cfg, ["always_now", "lazy_defer"], [(a, r) for a in (0.5, 1, 2) for r in (1.0, 1.5, 2.0)],
+                          overrides={field: value}, tags=dict(group="qnode", node=name))
+    return [dict(j, warmup_days=365) for j in jobs if int(j["year"]) == year]
+
+
 def qsmoke(cfg):
     """A few jobs of qtest, to check the pipeline on a corpus that is not a test corpus."""
     jobs = [j for j in qtest(cfg) if int(j["year"]) == 2021 and float(j["tag_autonomy"]) in (1.0, 30.0) and float(j["ratio"]) == 1.5]
@@ -354,7 +368,7 @@ def qsmoke(cfg):
     return [j for j in jobs if j["location"] in keep]
 
 
-GROUPS = dict(qsmoke=qsmoke, qtest=qtest, v6screen=v6screen, v5capscreen=v5capscreen, v5screen=v5screen, v4screen=v4screen, coverage=coverage, grid=grid, sens=sens, wake=wake, latency=latency, sites=sites,
+GROUPS = dict(qnode=qnode, qsmoke=qsmoke, qtest=qtest, v6screen=v6screen, v5capscreen=v5capscreen, v5screen=v5screen, v4screen=v4screen, coverage=coverage, grid=grid, sens=sens, wake=wake, latency=latency, sites=sites,
               prereg=prereg, v3grid=v3grid, v3wake=v3wake, v3grid2=v3grid2, v3grid4=v3grid4, v3wake4=v3wake4,
               prereg2=prereg2, wake2=wake2, v3grid5=v3grid5, v3ref5=v3ref5, base5reg=base5reg,
               base5new=base5new, v3wake5=v3wake5, v3frozen=v3frozen)
@@ -377,7 +391,7 @@ def main():
     if not os.path.exists(f"{cfg.artifacts_dir}/outcomes.npz"):
         sys.exit(f"{cfg.artifacts_dir}/outcomes.npz not found. Point --out at the folder of the "
                  f"earlier full run (the one holding artifacts/), or run stages 1-3 first.")
-    if args.only not in (["qtest"], ["qsmoke"]):            # variants that the frozen test does not score
+    if not set(args.only) <= {"qtest", "qsmoke", "qnode"}:            # variants that the frozen test does not score
         cfg.aging.variant_k_sigmas = KSIG
         cfg.aging.variant_k_Ts = KT
         cfg.control.shadow_alphas = ALPHAS
