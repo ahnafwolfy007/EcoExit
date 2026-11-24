@@ -1,5 +1,6 @@
 """Tests for SolCascade WP0-WP2 (synthetic data only)."""
 import math
+import os
 
 import numpy as np
 import pandas as pd
@@ -440,3 +441,25 @@ def test_v7_fallback_only_where_a_night_does_not_fit():
     for f in ("v7", "v7_c50"):
         x = run(f, sun=0.1, days=60)[2]
         assert np.all(x.final_slot >= x.capture_slot)
+
+
+def test_score_v3_rules():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("score_v3", os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "analysis", "score_v3.py"))
+    Z = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(Z)
+    assert np.allclose(Z.holm([0.01, 0.04, 0.03]), [0.03, 0.06, 0.06])
+    c = dict(rho=0.3, life=1.9, life_p=0.0001, dv_large=-0.005, hv_all=1.0, hv_all_rel=0.04, hv_all_p=0.001, hv_large_rel=0.1, hv_large_p=0.001)
+    P = dict(rho=0.55, rho_p=1e-9, n_hi=60, n_lo=40, gain_lazy_hi=0.09, gain_lazy_lo=0.02, gain_policy_hi=0.08, gain_policy_hi_p=1e-9)
+    out = {k: dict(c) for k in "abcde"} | {"pooled": P}
+    v = Z.verdicts(out)
+    assert v["H1"]["passed"] and v["H2"]["passed"] and v["H3"]["passed"] and v["H4"]["passed"] and v["H4L"]["passed"]
+    out["a"]["life"] = 1.4
+    out["pooled"]["rho"] = 0.49
+    v = Z.verdicts(out)
+    assert v["H3"]["passed"] and not v["H1"]["passed"]
+    out["b"]["dv_large"] = -0.02
+    assert not Z.verdicts(out)["H3"]["passed"]
+    out["pooled"]["gain_lazy_lo"] = -0.01
+    out["pooled"]["rho"] = 0.6
+    assert Z.verdicts(out)["H1"]["passed"]

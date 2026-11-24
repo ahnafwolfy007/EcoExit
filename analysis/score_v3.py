@@ -173,6 +173,9 @@ def verdicts(out):
         p4 = holm([out[k]["hv_all_p"] for k in names])
         ok4 = [bool(out[k]["hv_all_rel"] >= 0.03 and p < 0.05) for k, p in zip(names, p4)]
         v["H4"] = dict(passed=sum(ok4) >= need4, corpora=dict(zip(names, ok4)), p_holm=dict(zip(names, p4)))
+        p5 = holm([out[k]["hv_large_p"] for k in names])
+        ok5 = [bool(out[k]["hv_large_rel"] >= 0.05 and p < 0.05) for k, p in zip(names, p5)]
+        v["H4L"] = dict(passed=sum(ok5) >= most, corpora=dict(zip(names, ok5)), p_holm=dict(zip(names, p5)))
     return v
 
 
