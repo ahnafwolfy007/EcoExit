@@ -21,8 +21,10 @@ Rules, fixed here:
             become "other_animal". Frames whose label says that nobody could
             tell (unknown, unidentifiable, problem ...) are dropped everywhere.
             An image with several labels takes its first animal label.
-  train     whole sequences drawn in a seeded random order from the training
-            cameras, up to 10,000 images, 20% empty.
+  train     whole bursts (gaps of at most 60 s, cut at 100 images) drawn in a
+            seeded random order from the training cameras, up to 10,000 images,
+            20% empty. Published sequence ids are not used: one corpus has a
+            single id for everything.
 """
 import hashlib
 import os
@@ -144,9 +146,11 @@ def select(table: pd.DataFrame, cfg) -> Tuple[Dict[str, pd.DataFrame], List[str]
     for k in ("eval", "calib"):
         out[k] = pd.concat([window_frames(g) for loc, g in known[known.location.isin(r[k])].groupby("location", sort=True)],
                            ignore_index=True)
-    pool = known[known.location.isin(r["train"]) & known.t.notna()]
-    key = pool.seq.where(pool.seq.astype(str).str.len() > 0, pool.image)
-    groups = {k: g.index.values for k, g in pool.groupby(key.values, sort=True)}
+    pool = known[known.location.isin(r["train"]) & known.t.notna()].sort_values(["location", "t", "frame", "image"])
+    gap = pool.groupby("location").t.diff().dt.total_seconds()
+    burst = (gap.isna() | (gap > 60)).cumsum()
+    part = pool.groupby(burst).cumcount() // 100
+    groups = {k: g.index.values for k, g in pool.groupby([burst.values, part.values], sort=True)}
     keys = sorted(groups)
     np.random.default_rng(cfg.vision.seed).shuffle(keys)
     n_empty = int(cfg.data.lila_train_images * cfg.data.lila_train_empty_frac)
@@ -164,6 +168,9 @@ def select(table: pd.DataFrame, cfg) -> Tuple[Dict[str, pd.DataFrame], List[str]
             a += len(ix)
         if e >= n_empty and a >= n_animal:
             break
+    if not take:
+        raise SystemExit(f"no training images: {len(pool):,} in the pool, {len(groups):,} bursts, "
+                         f"{pool.seq.nunique():,} sequence ids, {len(r['train'])} cameras")
     out["train"] = pool.loc[np.concatenate(take)].reset_index(drop=True)
     n = Counter(out["train"].label)
     keep = {x for x, c in n.items() if c >= MIN_TRAIN} | {"empty"}
